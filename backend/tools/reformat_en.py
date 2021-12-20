@@ -9,7 +9,6 @@ import json
 import os
 
 import pysrt
-import sys
 import wordsegment
 import re
 
