@@ -27,7 +27,8 @@ if not os.path.exists(os.path.join(os.path.dirname(os.path.dirname(__file__)), '
         f.write('[DEFAULT]\n')
         f.write('Interface = 简体中文\n')
         f.write('Language = ch\n')
-        f.write('Mode = fast')
+        f.write('Mode = fast\n')
+        f.write('Model_Base = .')
 config.read(MODE_CONFIG_PATH, encoding='utf-8')
 
 
@@ -55,9 +56,17 @@ if MODE_TYPE == 'accurate':
 if MODE_TYPE == 'fast':
     ACCURATE_MODE_ON = False
 
+
+
 # --------------------- 请你不要改 start-----------------------------
 # 项目的base目录
 BASE_DIR = str(Path(os.path.abspath(__file__)).parent)
+
+MODEL_BASE = config['DEFAULT']['Model_Base']
+if MODEL_BASE == ".":
+    MODEL_BASE = BASE_DIR
+print(f"Model Base：{MODEL_BASE}")
+
 # 是否包含中文
 if re.search(r"[\u4e00-\u9fa5]+", BASE_DIR):
     IS_LEGAL_PATH = False
@@ -69,11 +78,11 @@ while not IS_LEGAL_PATH:
     time.sleep(3)
 # 模型文件目录
 # 文本检测模型
-DET_MODEL_BASE = os.path.join(BASE_DIR, '', 'models')
+DET_MODEL_BASE = os.path.join(MODEL_BASE, '', 'models')
 DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, 'ch_det')
 DET_MODEL_FAST_PATH = os.path.join(DET_MODEL_BASE, 'ch_det_fast')
 # 设置文本识别模型 + 字典
-REC_MODEL_BASE = os.path.join(BASE_DIR, '', 'models')
+REC_MODEL_BASE = DET_MODEL_BASE
 # 默认文本识别模型为中文
 REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, '', 'models', 'ch_rec')
 REC_MODEL_FAST_PATH = os.path.join(REC_MODEL_BASE, 'ch_rec_fast')
@@ -139,7 +148,7 @@ BG_VALUE_OTHER = 63
 ROI_RATE = 0.4
 
 # 默认字幕出现区域为下方
-SUBTITLE_AREA = SubtitleArea.UNKNOWN
+SUBTITLE_AREA = SubtitleArea.LOWER_PART
 
 # 余弦相似度阈值
 # 数值越小生成的视频帧越少，相对提取速度更快但生成的字幕越不精准
