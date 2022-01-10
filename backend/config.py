@@ -28,7 +28,8 @@ if not os.path.exists(os.path.join(os.path.dirname(os.path.dirname(__file__)), '
         f.write('Interface = 简体中文\n')
         f.write('Language = ch\n')
         f.write('Mode = fast\n')
-        f.write('Model_Base = .')
+        f.write('Model_Base = .\n')
+        f.write('Temp_Output_Dir = .')
 config.read(MODE_CONFIG_PATH, encoding='utf-8')
 
 
@@ -66,6 +67,11 @@ MODEL_BASE = config['DEFAULT']['Model_Base']
 if MODEL_BASE == ".":
     MODEL_BASE = BASE_DIR
 print(f"Model Base：{MODEL_BASE}")
+
+TEMP_OUTPUT_DIR = config['DEFAULT']['Temp_Output_Dir']
+if TEMP_OUTPUT_DIR == ".":
+    TEMP_OUTPUT_DIR == BASE_DIR
+print(f"Temp Output Dir：{MODEL_BASE}")
 
 # 是否包含中文
 if re.search(r"[\u4e00-\u9fa5]+", BASE_DIR):
