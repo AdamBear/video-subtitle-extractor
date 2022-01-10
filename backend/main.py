@@ -32,7 +32,7 @@ import platform
 class OcrRecogniser:
     def __init__(self):
         # 获取参数对象
-        self.args = utility.parse_args()
+        self.args, _ = utility.parse_args()
         self.recogniser = self.init_model()
 
     def predict(self, image):
