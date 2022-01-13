@@ -71,7 +71,7 @@ print(f"Model Base：{MODEL_BASE}")
 TEMP_OUTPUT_DIR = config['DEFAULT']['Temp_Output_Dir']
 if TEMP_OUTPUT_DIR == ".":
     TEMP_OUTPUT_DIR == BASE_DIR
-print(f"Temp Output Dir：{MODEL_BASE}")
+print(f"Temp Output Dir：{TEMP_OUTPUT_DIR}")
 
 # 是否包含中文
 if re.search(r"[\u4e00-\u9fa5]+", BASE_DIR):

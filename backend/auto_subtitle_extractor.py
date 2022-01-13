@@ -1,28 +1,18 @@
-import os
+import hashlib
 import json
 import os
-import random
 import shutil
 import time
 from collections import Counter
 
+import config
 import cv2
 import requests
 import unicodedata
 from Levenshtein import ratio
-from PIL import Image
-from numpy import average, dot, linalg
-
-import config
 from config import interface_config
-from main import OcrRecogniser
-from ppocr.utils.utility import get_image_file_list
 from tools.reformat_en import reformat
-import hashlib
 
-
-# import sys
-# sys.path.insert(0, os.path.dirname(__file__))
 
 def post_to_recognize(image_file_list):
     url = "http://127.0.0.1:8868/predict/ocr_system"
@@ -46,7 +36,6 @@ def get_hash(url):
     return str(hex_result.hexdigest())
 
 
-##todo: 参考一下bert的分词逻辑，基于中文的处理比这个完善
 def is_chinese_char(uchar):
     if (uchar >= u'\u4e00' and uchar <= u'\u9fff'):
         return True
@@ -73,12 +62,17 @@ class AutoSubtitleExtractor():
     视频字幕提取类
     """
 
-    def __init__(self, vd_path):
+    def __init__(self, vd_path, export_key_frames=False):
         self.sub_area = None
+        self.export_key_frames = export_key_frames
+
         # 字幕区域位置
         self.subtitle_area = config.SubtitleArea.LOWER_PART
+
         # 临时存储文件夹
-        self.temp_output_dir = os.path.join(os.path.dirname(config.BASE_DIR), 'output')
+        # self.temp_output_dir = os.path.join(os.path.dirname(config.BASE_DIR), 'output')
+        self.temp_output_dir = os.path.join(config.TEMP_OUTPUT_DIR, get_hash(vd_path))
+
         # 视频路径
         self.video_path = vd_path
         self.video_cap = cv2.VideoCapture(vd_path)
@@ -127,7 +121,10 @@ class AutoSubtitleExtractor():
 
         print(interface_config['Main']['StartGenerateSub'])
         # 判断是否开启精准模式
-        self.generate_subtitle_file()
+        result = self.generate_subtitle_file()
+
+        # 清理临时文件
+        # self._delete_frame_cache()
 
         # 如果识别的字幕语言包含英文，则将英文分词
         if config.REC_CHAR_TYPE in ('ch', 'EN', 'en', 'ch_tra'):
@@ -135,64 +132,14 @@ class AutoSubtitleExtractor():
         print(interface_config['Main']['FinishGenerateSub'])
         self.progress = 100
 
-    def extract_frame(self):
-        """
-        根据视频的分辨率，将高分辨的视频帧缩放到1280*720p
-        根据字幕区域位置，将该图像区域截取出来
-        """
-        # 删除缓存
-        self._delete_frame_cache()
-
-        # 当前视频帧的帧号
-        frame_no = 0
-
-        while self.video_cap.isOpened():
-            ret, frame = self.video_cap.read()
-            # 如果读取视频帧失败（视频读到最后一帧）
-            if not ret:
-                break
-            # 读取视频帧成功
-            else:
-                frame_no += 1
-                frame = self._frame_preprocess(frame)
-
-                # 帧名往前补零，后续用于排序与时间戳转换，补足8位
-                # 一部10h电影，fps120帧最多也才1*60*60*120=432000 6位，所以8位足够
-                filename = os.path.join(self.frame_output_dir, str(frame_no).zfill(8) + '.jpg')
-                # 保存视频帧
-                cv2.imwrite(filename, frame)
-
-                # 将当前帧与接下来的帧进行比较，计算余弦相似度
-                compare_times = 0
-                while self.video_cap.isOpened():
-                    ret, frame_next = self.video_cap.read()
-                    if ret:
-                        frame_no += 1
-                        # 更新进度条
-                        self.progress = (frame_no / self.frame_count) * 100
-                        frame_next = self._frame_preprocess(frame_next)
-                        cosine_distance = self._compute_image_similarity(Image.fromarray(frame),
-                                                                         Image.fromarray(frame_next))
-                        compare_times += 1
-                        if compare_times == config.FRAME_COMPARE_TIMES:
-                            break
-                        if cosine_distance > config.COSINE_SIMILARITY_THRESHOLD:
-                            # 如果下一帧与当前帧的相似度大于设定阈值，则略过该帧
-                            continue
-                        # 如果相似度小于设定阈值，停止该while循环
-                        else:
-                            break
-                    else:
-                        break
-
-        self.video_cap.release()
+        return result
 
     def extract_frame_by_fps(self):
         """
         根据帧率，定时提取视频帧，容易丢字幕，但速度快
         """
         # 删除缓存
-        self._delete_frame_cache()
+        self.delete_frame_cache()
 
         # 当前视频帧的帧号
         frame_no = 0
@@ -205,6 +152,12 @@ class AutoSubtitleExtractor():
             # 读取视频帧成功
             else:
                 frame_no += 1
+
+                if self.export_key_frames:
+                    # 保存原始视频帧
+                    org_filename = os.path.join(self.frame_output_dir, str(frame_no).zfill(8) + '.org.png')
+                    cv2.imwrite(org_filename, frame)
+
                 frame = self._frame_preprocess(frame)
 
                 # 帧名往前补零，后续用于排序与时间戳转换，补足8位
@@ -263,24 +216,43 @@ class AutoSubtitleExtractor():
         """
         subtitle_content = self._remove_duplicate_subtitle()
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
-        # 保存持续时间不足1秒的字幕行，用于后续处理
-        post_process_subtitle = []
+        processed_subtitle = []
+
         with open(srt_filename, mode='w', encoding='utf-8') as f:
             for index, content in enumerate(subtitle_content):
                 line_code = index + 1
-                frame_start = self._frame_to_timecode(int(content[0]))
+                frame_no_start = int(content[0])
+                frame_start = self._frame_to_timecode(frame_no_start)
                 # 比较起始帧号与结束帧号， 如果字幕持续时间不足1秒，则将显示时间设为1s
                 if abs(int(content[1]) - int(content[0])) < self.fps:
-                    frame_end = self._frame_to_timecode(int(int(content[0]) + self.fps))
-                    post_process_subtitle.append(line_code)
+                    frame_no_end = int(int(content[0]) + self.fps)
+                    frame_end = self._frame_to_timecode(frame_no_end)
                 else:
-                    frame_end = self._frame_to_timecode(int(content[1]))
+                    frame_no_end = int(content[1])
+                    frame_end = self._frame_to_timecode(frame_no_end)
                 frame_content = content[2]
+                processed_subtitle.append([frame_start, frame_end, frame_no_start, frame_no_end, frame_content])
                 subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n'
                 f.write(subtitle_line)
         print(f"{interface_config['Main']['SubLocation']} {srt_filename}")
-        # 返回持续时间低于1s的字幕行
-        return post_process_subtitle
+
+        # 保存原始关键帧
+        # 取得保存路径，拼到kfs目录下
+        if self.export_key_frames:
+            # kfs_path = os.path.join(os.path.dirname(self.video_path), "kfs")
+            # if not os.path.exists(kfs_path):
+            #     os.makedirs(kfs_path)
+            # for f in processed_subtitle:
+            #     org_filename = os.path.join(self.frame_output_dir, str(f[2]).zfill(8) + '.org.png')
+            #     exported_filename = os.path.join(kfs_path, str(f[2]).zfill(8) + '.jpg')
+            #     f.append(str(f[2]).zfill(8) + '.jpg')
+            #     shutil.copyfile(org_filename, exported_filename)
+            for f in processed_subtitle:
+                org_filename = os.path.join(self.frame_output_dir, str(f[2]).zfill(8) + '.org.png')
+                f.append(org_filename)
+                f.append(str(f[2]).zfill(8) + ".jpg")
+
+        return processed_subtitle
 
     def _frame_preprocess(self, frame):
         """
@@ -389,7 +361,7 @@ class AutoSubtitleExtractor():
     def _concat_content_with_same_frameno(self):
         """
         将raw txt文本中具有相同帧号的字幕行合并
-        # todo: 计数，并判断有无台标或提示文本，需要集中移除
+        # todo: 通过重复计数，移除超过次数的文本，可能是台标
         """
         with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as r:
             lines = r.readlines()
@@ -437,6 +409,12 @@ class AutoSubtitleExtractor():
         for i in concatenation_list:
             for j in i[1][1:]:
                 to_delete.append(content_list[j])
+
+        # 移出空白行
+        for i in content_list:
+            if len(i[2].replace("\n", "").strip()) == 0:
+                to_delete.append(i)
+
         for i in to_delete:
             if i in content_list:
                 content_list.remove(i)
@@ -462,29 +440,6 @@ class AutoSubtitleExtractor():
                     coordinates_list[index] = i
             index += 1
         return coordinates_list
-
-    def _compute_image_similarity(self, image1, image2):
-        """
-        计算两张图片的余弦相似度
-        """
-        image1 = self.__get_thum(image1)
-        image2 = self.__get_thum(image2)
-        images = [image1, image2]
-        vectors = []
-        norms = []
-        for image in images:
-            vector = []
-            for pixel_tuple in image.getdata():
-                vector.append(average(pixel_tuple))
-            vectors.append(vector)
-            # linalg=linear（线性）+algebra（代数），norm则表示范数
-            # 求图片的范数
-            norms.append(linalg.norm(vector, 2))
-        a, b = vectors
-        a_norm, b_norm = norms
-        # dot返回的是点积，对二维数组（矩阵）进行计算
-        res = dot(a / a_norm, b / b_norm)
-        return res
 
     def _get_coordinates(self, dt_box):
         """
@@ -517,26 +472,7 @@ class AutoSubtitleExtractor():
                abs(coordinate1[2] - coordinate2[2]) < config.PIXEL_TOLERANCE_Y and \
                abs(coordinate1[3] - coordinate2[3]) < config.PIXEL_TOLERANCE_Y
 
-    def _get_thum(self, image, size=(64, 64), greyscale=False):
-        """
-        对图片进行统一化处理
-        """
-        # 利用image对图像大小重新设置, Image.ANTIALIAS为高质量的
-        image = image.resize(size, Image.ANTIALIAS)
-        if greyscale:
-            # 将图片转换为L模式，其为灰度图，其每个像素用8个bit表示
-            image = image.convert('L')
-        return image
-
-    def _delete_frame_cache(self):
+    def delete_frame_cache(self):
         if len(os.listdir(self.frame_output_dir)) > 0:
             for i in os.listdir(self.frame_output_dir):
                 os.remove(os.path.join(self.frame_output_dir, i))
-
-
-if __name__ == '__main__':
-    # 提示用户输入视频路径
-    video_path = "d:/d2.mp4"
-    se = AutoSubtitleExtractor(video_path)
-    # 开始提取字幕
-    se.run()
