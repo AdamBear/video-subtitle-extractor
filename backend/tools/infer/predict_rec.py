@@ -63,7 +63,8 @@ class TextRecognizer(object):
             }
         self.postprocess_op = build_post_process(postprocess_params)
         self.predictor, self.input_tensor, self.output_tensors = \
-            utility.create_predictor(args, 'rec', logger)
+            utility.create_predictor(args
+                                     , 'rec', logger)
 
     def resize_norm_img(self, img, max_wh_ratio):
         imgC, imgH, imgW = self.rec_image_shape

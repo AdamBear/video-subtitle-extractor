@@ -80,6 +80,8 @@ class AutoSubtitleExtractor():
         self.frame_count = self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT)
         # 视频帧率
         self.fps = self.video_cap.get(cv2.CAP_PROP_FPS)
+        # 视频秒数
+        self.video_length = float(self.frame_count / self.fps)
         # 视频尺寸
         self.frame_height = int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.frame_width = int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -263,7 +265,8 @@ class AutoSubtitleExtractor():
         # if self.frame_width > 1280:
         #     scale_rate = round(float(1280 / self.frame_width), 2)
         #     frames = cv2.resize(frames, None, fx=scale_rate, fy=scale_rate, interpolation=cv2.INTER_AREA)
-        cropped = int(frame.shape[0] // 2) + config.SUBTITLE_AREA_DEVIATION_PIXEL
+        cropped = int(frame.shape[0] // 2) - config.SUBTITLE_AREA_DEVIATION_PIXEL
+
         # 如果字幕出现的区域在下部分
         if self.subtitle_area == config.SubtitleArea.LOWER_PART:
             # 将视频帧切割为下半部分
