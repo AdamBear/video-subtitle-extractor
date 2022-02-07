@@ -4,7 +4,7 @@ import os
 import shutil
 import time
 from collections import Counter
-
+import string
 import config
 import cv2
 import requests
@@ -222,11 +222,15 @@ class AutoSubtitleExtractor():
         """
         生成srt格式的字幕文件
         """
+        if self.remove_too_common:
+            self._remove_too_common()
+
         if self.detect_subtitle:
             coordinates_list = self._detect_subtitle_area()
             self.filter_scene_text(coordinates_list)
 
         subtitle_content = self._remove_duplicate_subtitle()
+
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
 
@@ -328,10 +332,7 @@ class AutoSubtitleExtractor():
             # 只有一个字的一般是误识别，可以忽略
             if len(content) < 3:
                 continue
-            # too_commons在这里的处理太粗爆
-            if self.remove_too_common:
-                if content in self.too_commons:
-                    continue
+
             content_list.append((frame_no, content))
 
         # 循环遍历每行字幕，记录开始时间与结束时间
@@ -354,8 +355,9 @@ class AutoSubtitleExtractor():
                     if len(unique_subtitle_list) < 1:
                         unique_subtitle_list.append((start_frame, end_frame, i[1]))
                     else:
-                        string_a = unique_subtitle_list[-1][2].replace(' ', '')
-                        string_b = i[1].replace(' ', '')
+                        string_a = unique_subtitle_list[-1][2].replace(' ', '').translate(
+                            str.maketrans('', '', string.punctuation))
+                        string_b = i[1].replace(' ', '').translate(str.maketrans('', '', string.punctuation))
                         similarity_ratio = ratio(string_a, string_b)
                         # 打印相似度
                         # print(f'{similarity_ratio}: {unique_subtitle_list[-1][2]} vs {i[1]}')
@@ -381,7 +383,7 @@ class AutoSubtitleExtractor():
                     continue
         return unique_subtitle_list
 
-    def _concat_content_with_same_frameno(self):
+    def _remove_too_common(self):
         """
         将raw txt文本中具有相同帧号的字幕行合并
         # todo: 通过重复计数，移除超过次数的文本，可能是台标
@@ -401,19 +403,39 @@ class AutoSubtitleExtractor():
             content_list.append([frame_no, coordinate, content])
 
         max_common_count = 15
-        if self.detect_subtitle:
-            max_common_count = 10
+        #         if self.detect_subtitle:
+        #             max_common_count = 10
 
-        if self.remove_too_common:
-            self.too_commons = set()
-            self.counter = Counter(contents).most_common()
-            for c in self.counter:
-                if c[1] > max_common_count:
-                    self.too_commons.add(c[0])
-                else:
-                    break
+        self.too_commons = set()
+        self.counter = Counter(contents).most_common()
+        for c in self.counter:
+            if c[1] > max_common_count:
+                self.too_commons.add(c[0])
+            else:
+                break
 
-        # 找出那些不止一行的帧号
+        with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
+            for frame_no, coordinate, content in content_list:
+                if not content in self.too_commons:
+                    content = unicodedata.normalize('NFKC', content)
+                    f.write(f'{frame_no}\t{coordinate}\t{content}')
+
+    def _concat_content_with_same_frameno(self):
+        with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as r:
+            lines = r.readlines()
+
+        content_list = []
+        frame_no_list = []
+        contents = []
+        for line in lines:
+            frame_no = line.split('\t')[0]
+            frame_no_list.append(frame_no)
+            coordinate = line.split('\t')[1]
+            content = line.split('\t')[2]
+            contents.append(content)
+            content_list.append([frame_no, coordinate, content])
+
+            # 找出那些不止一行的帧号
         frame_no_list = [i[0] for i in Counter(frame_no_list).most_common() if i[1] > 1]
 
         # 找出这些帧号出现的位置
@@ -426,9 +448,9 @@ class AutoSubtitleExtractor():
             content = []
             for j in i[1]:
                 txt = content_list[j][2]
-                if self.remove_too_common:
-                    if txt in self.too_commons:
-                        continue
+                #                 if self.remove_too_common:
+                #                     if txt in self.too_commons:
+                #                         continue
 
                 txt = txt.replace(" ", "").replace('\n', '')
                 # 全部是英文的不要处理，过短的不要处理，一般都是识别错误
@@ -494,12 +516,12 @@ class AutoSubtitleExtractor():
             for frame_no, coordinate, content in zip(frame_no_list, coordinates_list, content_list):
                 f.write(f'{frame_no}\t{coordinate}\t{content}')
 
-    #         if len(Counter(coordinates_list).most_common()) > config.WATERMARK_AREA_NUM:
-    #             # 读取配置文件，返回可能为水印区域的坐标列表
-    #             return Counter(coordinates_list).most_common(config.WATERMARK_AREA_NUM)
-    #         else:
-    #             # 不够则有几个返回几个
-    #             return Counter(coordinates_list).most_common()
+        if len(Counter(coordinates_list).most_common()) > config.WATERMARK_AREA_NUM:
+            # 读取配置文件，返回可能为水印区域的坐标列表
+            return Counter(coordinates_list).most_common(config.WATERMARK_AREA_NUM)
+        else:
+            # 不够则有几个返回几个
+            return Counter(coordinates_list).most_common()
 
     def _detect_subtitle_area(self):
         """
