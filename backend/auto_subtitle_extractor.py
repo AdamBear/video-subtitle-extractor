@@ -66,6 +66,10 @@ class AutoSubtitleExtractor():
         self.sub_area = None
         self.export_key_frames = export_key_frames
 
+        self.debug = False
+        self.remove_too_common = True
+        self.detect_subtitle = True
+
         # 字幕区域位置
         self.subtitle_area = config.SubtitleArea.LOWER_PART
 
@@ -208,14 +212,20 @@ class AutoSubtitleExtractor():
                     f.write(f'{os.path.splitext(frame)[0]}\t'
                             f'{coordinate}\t'
                             f'{content[0]}\n')
-        # 关闭文件
-        # shutil.copyfile(self.raw_subtitle_path, self.raw_subtitle_path + ".raw.txt")
+                    # 关闭文件
         f.close()
+
+        if self.debug:
+            shutil.copyfile(self.raw_subtitle_path, self.raw_subtitle_path + ".raw.txt")
 
     def generate_subtitle_file(self):
         """
         生成srt格式的字幕文件
         """
+        if self.detect_subtitle:
+            coordinates_list = self._detect_subtitle_area()
+            self.filter_scene_text(coordinates_list)
+
         subtitle_content = self._remove_duplicate_subtitle()
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
@@ -308,13 +318,22 @@ class AutoSubtitleExtractor():
         读取原始的raw txt，去除重复行，返回去除了重复后的字幕列表
         """
         self._concat_content_with_same_frameno()
+
         with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as r:
             lines = r.readlines()
         content_list = []
         for line in lines:
             frame_no = line.split('\t')[0]
             content = line.split('\t')[2]
+            # 只有一个字的一般是误识别，可以忽略
+            if len(content) < 3:
+                continue
+            # too_commons在这里的处理太粗爆
+            if self.remove_too_common:
+                if content in self.too_commons:
+                    continue
             content_list.append((frame_no, content))
+
         # 循环遍历每行字幕，记录开始时间与结束时间
         index = 0
         # 去重后的字幕列表
@@ -344,6 +363,7 @@ class AutoSubtitleExtractor():
                         if similarity_ratio < config.THRESHOLD_TEXT_SIMILARITY:
                             unique_subtitle_list.append((start_frame, end_frame, i[1]))
                         else:
+                            # todo，相似的取出现次数更多的来保留!!!!!，现在的算法是有问题的。取长的是为了防止飞字，但是第一个容易误识别
                             # 如果大于阈值，但又不完全相同，说明两行字幕相似
                             # 可能出现以下情况: "但如何进人并接管上海" vs "但如何进入并接管上海"
                             # OCR识别出现了错误识别
@@ -380,12 +400,18 @@ class AutoSubtitleExtractor():
             contents.append(content)
             content_list.append([frame_no, coordinate, content])
 
-        too_commons = set()
-        for c in Counter(contents).most_common():
-            if c[1] > 50:
-                too_commons.add(c[0])
-            else:
-                break
+        max_common_count = 15
+        if self.detect_subtitle:
+            max_common_count = 10
+
+        if self.remove_too_common:
+            self.too_commons = set()
+            self.counter = Counter(contents).most_common()
+            for c in self.counter:
+                if c[1] > max_common_count:
+                    self.too_commons.add(c[0])
+                else:
+                    break
 
         # 找出那些不止一行的帧号
         frame_no_list = [i[0] for i in Counter(frame_no_list).most_common() if i[1] > 1]
@@ -400,10 +426,16 @@ class AutoSubtitleExtractor():
             content = []
             for j in i[1]:
                 txt = content_list[j][2]
-                if txt not in too_commons and not is_all_english_char(txt):
+                if self.remove_too_common:
+                    if txt in self.too_commons:
+                        continue
+
+                txt = txt.replace(" ", "").replace('\n', '')
+                # 全部是英文的不要处理，过短的不要处理，一般都是识别错误
+                if not is_all_english_char(txt) and len(txt) > 2:
                     content.append(txt)
 
-            content = ' '.join(content).replace('\n', ' ') + '\n'
+            content = ' '.join(content) + '\n'
             for k in i[1]:
                 content_list[k][2] = content
 
@@ -426,6 +458,87 @@ class AutoSubtitleExtractor():
             for frame_no, coordinate, content in content_list:
                 content = unicodedata.normalize('NFKC', content)
                 f.write(f'{frame_no}\t{coordinate}\t{content}')
+
+    def _detect_watermark_area(self):
+        """
+        根据识别出来的raw txt文件中的坐标点信息，查找水印区域
+        假定：水印区域（台标）的坐标在水平和垂直方向都是固定的，也就是具有(xmin, xmax, ymin, ymax)相对固定
+        根据坐标点信息，进行统计，将一直具有固定坐标的文本区域选出
+        :return 返回最有可能的水印区域
+        """
+        f = open(self.raw_subtitle_path, mode='r', encoding='utf-8')  # 打开txt文件，以‘utf-8’编码读取
+        line = f.readline()  # 以行的形式进行读取文件
+        # 坐标点列表
+        coordinates_list = []
+        # 帧列表
+        frame_no_list = []
+        # 内容列表
+        content_list = []
+        while line:
+            frame_no = line.split('\t')[0]
+            text_position = line.split('\t')[1].split('(')[1].split(')')[0].split(', ')
+            content = line.split('\t')[2]
+            frame_no_list.append(frame_no)
+            coordinates_list.append((int(text_position[0]),
+                                     int(text_position[1]),
+                                     int(text_position[2]),
+                                     int(text_position[3])))
+            content_list.append(content)
+            line = f.readline()
+        f.close()
+        # 将坐标列表的相似值统一
+        coordinates_list = self._unite_coordinates(coordinates_list)
+
+        # 将原txt文件的坐标更新为归一后的坐标
+        with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
+            for frame_no, coordinate, content in zip(frame_no_list, coordinates_list, content_list):
+                f.write(f'{frame_no}\t{coordinate}\t{content}')
+
+    #         if len(Counter(coordinates_list).most_common()) > config.WATERMARK_AREA_NUM:
+    #             # 读取配置文件，返回可能为水印区域的坐标列表
+    #             return Counter(coordinates_list).most_common(config.WATERMARK_AREA_NUM)
+    #         else:
+    #             # 不够则有几个返回几个
+    #             return Counter(coordinates_list).most_common()
+
+    def _detect_subtitle_area(self):
+        """
+        读取过滤水印区域后的raw txt文件，根据坐标信息，查找字幕区域
+        假定：字幕区域在y轴上有一个相对固定的坐标范围，相对于场景文本，这个范围出现频率更高
+        :return 返回字幕的区域位置
+        """
+        # 打开去水印区域处理过的raw txt
+        f = open(self.raw_subtitle_path, mode='r', encoding='utf-8')  # 打开txt文件，以‘utf-8’编码读取
+        line = f.readline()  # 以行的形式进行读取文件
+        # y坐标点列表
+        y_coordinates_list = []
+        while line:
+            text_position = line.split('\t')[1].split('(')[1].split(')')[0].split(', ')
+            y_coordinates_list.append((int(text_position[2]), int(text_position[3])))
+            line = f.readline()
+        f.close()
+        return Counter(y_coordinates_list).most_common(1)
+
+    def filter_scene_text(self, coordinates_list):
+        # 检查水印区域，并处理区域合并
+        self._detect_watermark_area()
+
+        # 加上字幕区域判断，可选的。
+        subtitle_area = self._detect_subtitle_area()[0][0]
+
+        # 为了防止有双行字幕，根据容忍度，将字幕区域y范围加高
+        ymin = abs(subtitle_area[0] - config.SUBTITLE_AREA_DEVIATION_PIXEL)
+        ymax = subtitle_area[1] + config.SUBTITLE_AREA_DEVIATION_PIXEL
+
+        with open(self.raw_subtitle_path, mode='r+', encoding='utf-8') as f:
+            content = f.readlines()
+            f.seek(0)
+            for i in content:
+                i_ymin = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[2])
+                i_ymax = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[3])
+                if ymin <= i_ymin and i_ymax <= ymax:
+                    f.write(i)
+            f.truncate()
 
     def _unite_coordinates(self, coordinates_list):
         """
