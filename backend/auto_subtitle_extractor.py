@@ -12,6 +12,10 @@ import unicodedata
 from Levenshtein import ratio
 from config import interface_config
 from tools.reformat_en import reformat
+from scenedetect.detectors import ContentDetector
+# Standard PySceneDetect imports:
+from scenedetect import VideoManager
+from scenedetect import SceneManager
 
 
 def post_to_recognize(image_file_list):
@@ -69,6 +73,7 @@ class AutoSubtitleExtractor():
         self.debug = False
         self.remove_too_common = True
         self.detect_subtitle = True
+        self.detect_scene = True
 
         # 字幕区域位置
         self.subtitle_area = config.SubtitleArea.LOWER_PART
@@ -159,18 +164,20 @@ class AutoSubtitleExtractor():
             else:
                 frame_no += 1
 
+                filename = os.path.join(self.frame_output_dir, str(frame_no).zfill(8) + '.jpg')
+
                 if self.export_key_frames:
-                    # 保存原始视频帧
+                    # 保存原始视频帧，保存为jpg，临时使用png文件名
                     org_filename = os.path.join(self.frame_output_dir, str(frame_no).zfill(8) + '.org.png')
-                    cv2.imwrite(org_filename, frame)
+                    cv2.imwrite(filename, frame)
+                    os.rename(filename, org_filename)
 
                 frame = self._frame_preprocess(frame)
 
                 # 帧名往前补零，后续用于排序与时间戳转换，补足8位
                 # 一部10h电影，fps120帧最多也才1*60*60*120=432000 6位，所以8位足够
-                filename = os.path.join(self.frame_output_dir, str(frame_no).zfill(8) + '.jpg')
 
-                # 保存视频帧
+                # 保存截取的原视频帧
                 cv2.imwrite(filename, frame)
 
                 # 跳过剩下的帧
@@ -218,16 +225,36 @@ class AutoSubtitleExtractor():
         if self.debug:
             shutil.copyfile(self.raw_subtitle_path, self.raw_subtitle_path + ".raw.txt")
 
+    def find_scenes(self, threshold=30.0):
+        # Create our video & scene managers, then add the detector.
+        video_manager = VideoManager([self.video_path])
+        scene_manager = SceneManager()
+        scene_manager.add_detector(
+            ContentDetector(threshold=threshold))
+
+        # Improve processing speed by downscaling before processing.
+        video_manager.set_downscale_factor()
+
+        # Start the video manager and perform the scene detection.
+        video_manager.start()
+        scene_manager.detect_scenes(frame_source=video_manager)
+
+        # Each returned scene is a tuple of the (start, end) timecode.
+        return scene_manager.get_scene_list()
+
     def generate_subtitle_file(self):
         """
         生成srt格式的字幕文件
         """
+        if self.detect_scene:
+            scenes_codes = self.find_scenes()
+            self.scenes = [[] for i in range(len(scenes_codes))]
+
         if self.remove_too_common:
             self._remove_too_common()
 
         if self.detect_subtitle:
-            coordinates_list = self._detect_subtitle_area()
-            self.filter_scene_text(coordinates_list)
+            self.filter_scene_text()
 
         subtitle_content = self._remove_duplicate_subtitle()
 
@@ -250,19 +277,24 @@ class AutoSubtitleExtractor():
                 processed_subtitle.append([frame_start, frame_end, frame_no_start, frame_no_end, frame_content])
                 subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n'
                 f.write(subtitle_line)
+
+                # 简单算法，按场景将字幕时间轴分组出来
+                if self.detect_scene:
+                    last_scene_no = 0
+                    for i in range(last_scene_no, len(scenes_codes)):
+                        s = scenes_codes[i]
+                        if frame_no_start >= int(s[0]) and frame_no_end <= int(s[1]):
+                            last_scene_no = i
+                            if len(self.scenes[i]) > 0:
+                                self.scenes[i][2].append(index)
+                            else:
+                                self.scenes[i] = [frame_start, frame_end, [index]]
+
         print(f"{interface_config['Main']['SubLocation']} {srt_filename}")
 
         # 保存原始关键帧
         # 取得保存路径，拼到kfs目录下
         if self.export_key_frames:
-            # kfs_path = os.path.join(os.path.dirname(self.video_path), "kfs")
-            # if not os.path.exists(kfs_path):
-            #     os.makedirs(kfs_path)
-            # for f in processed_subtitle:
-            #     org_filename = os.path.join(self.frame_output_dir, str(f[2]).zfill(8) + '.org.png')
-            #     exported_filename = os.path.join(kfs_path, str(f[2]).zfill(8) + '.jpg')
-            #     f.append(str(f[2]).zfill(8) + '.jpg')
-            #     shutil.copyfile(org_filename, exported_filename)
             for f in processed_subtitle:
                 org_filename = os.path.join(self.frame_output_dir, str(f[2]).zfill(8) + '.org.png')
                 f.append(org_filename)
@@ -403,8 +435,6 @@ class AutoSubtitleExtractor():
             content_list.append([frame_no, coordinate, content])
 
         max_common_count = 15
-        #         if self.detect_subtitle:
-        #             max_common_count = 10
 
         self.too_commons = set()
         self.counter = Counter(contents).most_common()
@@ -448,10 +478,6 @@ class AutoSubtitleExtractor():
             content = []
             for j in i[1]:
                 txt = content_list[j][2]
-                #                 if self.remove_too_common:
-                #                     if txt in self.too_commons:
-                #                         continue
-
                 txt = txt.replace(" ", "").replace('\n', '')
                 # 全部是英文的不要处理，过短的不要处理，一般都是识别错误
                 if not is_all_english_char(txt) and len(txt) > 2:
@@ -541,7 +567,7 @@ class AutoSubtitleExtractor():
         f.close()
         return Counter(y_coordinates_list).most_common(1)
 
-    def filter_scene_text(self, coordinates_list):
+    def filter_scene_text(self):
         # 检查水印区域，并处理区域合并
         self._detect_watermark_area()
 
