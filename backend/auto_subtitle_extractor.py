@@ -286,6 +286,7 @@ class AutoSubtitleExtractor():
                         if frame_no_start >= int(s[0]) and frame_no_end <= int(s[1]):
                             last_scene_no = i
                             if len(self.scenes[i]) > 0:
+                                self.scenes[i][1] = frame_end
                                 self.scenes[i][2].append(index)
                             else:
                                 self.scenes[i] = [frame_start, frame_end, [index]]
