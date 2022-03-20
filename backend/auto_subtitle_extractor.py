@@ -638,6 +638,9 @@ class AutoSubtitleExtractor():
                abs(coordinate1[3] - coordinate2[3]) < config.PIXEL_TOLERANCE_Y
 
     def delete_frame_cache(self):
-        if len(os.listdir(self.frame_output_dir)) > 0:
-            for i in os.listdir(self.frame_output_dir):
-                os.remove(os.path.join(self.frame_output_dir, i))
+        import shutil
+        shutil.rmtree(self.frame_output_dir)
+
+        # if len(os.listdir(self.frame_output_dir)) > 0:
+        #     for i in os.listdir(self.frame_output_dir):
+        #         os.remove(os.path.join(self.frame_output_dir, i))
