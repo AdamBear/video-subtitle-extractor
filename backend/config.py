@@ -13,7 +13,7 @@ import re
 import time
 from pathlib import Path
 from enum import Enum
-from fsplit.filesplit import Filesplit
+#from fsplit.filesplit import Filesplit
 from paddle import fluid
 
 fluid.install_check.run_check()
@@ -106,10 +106,10 @@ if REC_CHAR_TYPE in ('ch', 'japan', 'korean', 'en', 'EN_symbol', 'french', 'germ
     if not os.path.exists(REC_MODEL_FAST_PATH):
         REC_MODEL_FAST_PATH = REC_MODEL_PATH
 
-# 查看该路径下是否有文本模型识别完整文件，没有的话合并小文件生成完整文件
-if 'inference.pdiparams' not in (os.listdir(REC_MODEL_PATH)):
-    fs = Filesplit()
-    fs.merge(input_dir=REC_MODEL_PATH)
+# # 查看该路径下是否有文本模型识别完整文件，没有的话合并小文件生成完整文件
+# if 'inference.pdiparams' not in (os.listdir(REC_MODEL_PATH)):
+#     fs = Filesplit()
+#     fs.merge(input_dir=REC_MODEL_PATH)
 
 
 # 默认字幕出现的大致区域
