@@ -16,7 +16,6 @@ from scenedetect.detectors import ContentDetector
 # Standard PySceneDetect imports:
 from scenedetect import VideoManager
 from scenedetect import SceneManager
-from PIL import Image
 
 
 def post_to_recognize(image_file_list):
@@ -62,64 +61,19 @@ def is_all_english_char(sentence):
     return True
 
 
-def get_split_spans(splits, fps, frame_count):
-    split_spans = []
-    # 分段分割出视频
-    if "," in splits:
-        last_end_frame = 0
-        spans = splits.split(",")
-        for i in range(len(spans)):
-            end_frame = float(spans[i]) * fps
-            if end_frame < last_end_frame:
-                return None
-
-            if end_frame > frame_count:
-                split_spans.append(frame_count)
-                return split_spans
-            last_end_frame = end_frame
-            split_spans.append(end_frame)
-
-        return split_spans
-
-    elif is_float(splits.strip()):
-        span = float(splits.strip())
-        i = 1
-        while i * span * fps < frame_count:
-            split_spans.append(i * span * fps)
-            i += 1
-
-        split_spans.append(frame_count)
-        return split_spans
-    else:
-        return None
-
-
-def cut_video(input_mp4, output_mp4, start, end, debug=False):
-    cmd = f'ffmpeg -y -ss {start} -to {end} -i {input_mp4}  {output_mp4}'
-    r = os.system(cmd)
-    if debug:
-        print(cmd)
-    if r == 0:
-        return output_mp4
-    else:
-        return ""
-
-
-class AutoSubtitleExtractor():
+class AutoSubtitleExtractor2():
     """
     视频字幕提取类
     """
 
-    def __init__(self, vd_path, export_key_frames):
+    def __init__(self, vd_path, export_key_frames=False):
         self.sub_area = None
         self.export_key_frames = export_key_frames
+
         self.debug = False
         self.remove_too_common = True
         self.detect_subtitle = True
         self.detect_scene = True
-        self.no_cut = True
-        self.splits = []
-        self.scenes = []
 
         # 字幕区域位置
         self.subtitle_area = config.SubtitleArea.LOWER_PART
@@ -140,8 +94,10 @@ class AutoSubtitleExtractor():
         # 视频尺寸
         self.frame_height = int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.frame_width = int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.size = (self.frame_width, self.frame_height)
-
+        # 字幕出现区域
+        self.subtitle_area = config.SUBTITLE_AREA
+        print(
+            f"{interface_config['Main']['FrameCount']}：{self.frame_count}，{interface_config['Main']['FrameRate']}：{self.fps}")
         # 提取的视频帧储存目录
         self.frame_output_dir = os.path.join(self.temp_output_dir, 'frames')
         # 提取的字幕文件存储目录
@@ -160,12 +116,6 @@ class AutoSubtitleExtractor():
         self.progress = 0
 
     def run(self):
-
-        # 指定分割点时不输出关键帧，不检查场景
-        if len(self.splits) > 0:
-            self.export_key_frames = False
-            self.detect_scene = False
-
         """
         运行整个提取视频的步骤
         """
@@ -195,7 +145,6 @@ class AutoSubtitleExtractor():
 
         return result
 
-    # todo: 继续优化，为了兼容去台标处理，可以考虑不切分，而使用全OCR识别，字幕区域可以使用算法去除
     def extract_frame_by_fps(self):
         """
         根据帧率，定时提取视频帧，容易丢字幕，但速度快
@@ -223,8 +172,7 @@ class AutoSubtitleExtractor():
                     cv2.imwrite(filename, frame)
                     os.rename(filename, org_filename)
 
-                if not self.no_cut:
-                    frame = self._frame_preprocess(frame)
+                frame = self._frame_preprocess(frame)
 
                 # 帧名往前补零，后续用于排序与时间戳转换，补足8位
                 # 一部10h电影，fps120帧最多也才1*60*60*120=432000 6位，所以8位足够
@@ -302,7 +250,6 @@ class AutoSubtitleExtractor():
             scenes_codes = self.find_scenes()
             self.scenes = [[] for i in range(len(scenes_codes))]
 
-            # 先检测并删除可能的台标或者背景，然后才能，所以需要考虑
         if self.remove_too_common:
             self._remove_too_common()
 
@@ -313,14 +260,6 @@ class AutoSubtitleExtractor():
 
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
-
-        split_spans = []
-        if len(self.splits) > 0:
-            cur_split_lines = ""
-            last_span_no = 0
-            last_span_frame = 1
-            split_spans = get_split_spans(self.splits, self.fps, self.frame_count)
-            self.scenes = [[] for _ in range(len(split_spans))]
 
         with open(srt_filename, mode='w', encoding='utf-8') as f:
             for index, content in enumerate(subtitle_content):
@@ -351,22 +290,6 @@ class AutoSubtitleExtractor():
                                 self.scenes[i][2].append(index)
                             else:
                                 self.scenes[i] = [frame_start, frame_end, [index]]
-
-                # 按指定分割来分场景出来
-                if len(split_spans) > 0:
-                    cur_split_lines += frame_content
-                    if frame_no_end > split_spans[last_span_no] and last_span_no < len(split_spans):
-                        split_vd_filename = os.path.join(self.temp_output_dir,
-                                                         os.path.split(self.video_path)[1] + "_" + str(
-                                                             last_span_frame) + "_" + str(frame_no_end) + ".mp4")
-                        print(f"cut video {last_span_frame} to {frame_no_end}")
-                        cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
-                                  frame_no_end / self.fps)
-                        self.scenes[last_span_no] = [self._frame_to_timecode(last_span_frame), frame_end,
-                                                     cur_split_lines, split_vd_filename]
-                        cur_split_lines = ""
-                        last_span_no += 1
-                        last_span_frame = frame_no_end
 
         print(f"{interface_config['Main']['SubLocation']} {srt_filename}")
 
@@ -408,12 +331,11 @@ class AutoSubtitleExtractor():
         :returns: SMPTE格式时间戳 as string, 如'01:02:12:32' 或者 '01:02:12;32'
         """
         # 设置当前帧号
-        # cap = cv2.VideoCapture(self.video_path)
-        # cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-        # cap.read()
+        cap = cv2.VideoCapture(self.video_path)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+        cap.read()
         # 获取当前帧号对应的时间戳
-        # milliseconds = cap.get(cv2.CAP_PROP_POS_MSEC)
-        milliseconds = 1000 / self.fps * frame_no
+        milliseconds = cap.get(cv2.CAP_PROP_POS_MSEC)
         seconds = milliseconds // 1000
         milliseconds = int(milliseconds % 1000)
         minutes = 0
@@ -425,7 +347,7 @@ class AutoSubtitleExtractor():
             hours = int(minutes // 60)
             minutes = int(minutes % 60)
         smpte_token = ','
-        # cap.release()
+        cap.release()
         return "%02d:%02d:%02d%s%02d" % (hours, minutes, seconds, smpte_token, milliseconds)
 
     def _remove_duplicate_subtitle(self):
@@ -481,6 +403,11 @@ class AutoSubtitleExtractor():
                             # 可能出现以下情况: "但如何进人并接管上海" vs "但如何进入并接管上海"
                             # OCR识别出现了错误识别
                             if similarity_ratio < 1:
+                                # TODO:
+                                # 1) 取出两行字幕的并集
+                                # 2) 纠错
+                                # print(f'{round(similarity_ratio, 2)}, 需要手动纠错:\n {string_a} vs\n {string_b}')
+                                # 保存较长的
                                 if len(string_a) < len(string_b):
                                     unique_subtitle_list[-1] = (start_frame, end_frame, i[1])
                     index += 1
@@ -488,8 +415,6 @@ class AutoSubtitleExtractor():
                 else:
                     continue
         return unique_subtitle_list
-
-        # 需要返回特别重复的台标或水印位置
 
     def _remove_too_common(self):
         """
@@ -641,50 +566,28 @@ class AutoSubtitleExtractor():
             y_coordinates_list.append((int(text_position[2]), int(text_position[3])))
             line = f.readline()
         f.close()
-        return Counter(y_coordinates_list).most_common(5)
+        return Counter(y_coordinates_list).most_common(1)
 
     def filter_scene_text(self):
         # 检查水印区域，并处理区域合并
-        # 此处需要重构，最多的一个未尝是正确的
         self._detect_watermark_area()
 
-        # 统计比较前5个，取字符数量最多的前两个加入到最终的字幕中
-        subtile_areas = self._detect_subtitle_area()
+        # 加上字幕区域判断，可选的。
+        subtitle_area = self._detect_subtitle_area()[0][0]
+
+        # 为了防止有双行字幕，根据容忍度，将字幕区域y范围加高
+        ymin = abs(subtitle_area[0] - config.SUBTITLE_AREA_DEVIATION_PIXEL)
+        ymax = subtitle_area[1] + config.SUBTITLE_AREA_DEVIATION_PIXEL
 
         with open(self.raw_subtitle_path, mode='r+', encoding='utf-8') as f:
             content = f.readlines()
-
-            area_subtitles = []
-            for i in range(len(subtile_areas)):
-                subtitle_area = subtile_areas[i][0]
-
-                # 为了防止有双行字幕，根据容忍度，将字幕区域y范围加高
-                ymin = abs(subtitle_area[0] - config.SUBTITLE_AREA_DEVIATION_PIXEL)
-                ymax = subtitle_area[1] + config.SUBTITLE_AREA_DEVIATION_PIXEL
-
-                area_subtitles.append(((ymin, ymax), set()))
-
-                for i in content:
-                    i_ymin = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[2])
-                    i_ymax = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[3])
-                    if ymin <= i_ymin and i_ymax <= ymax:
-                        area_subtitles[-1][1].update(set(i))
-
-            self.areas = []
-            for i, sa in enumerate(area_subtitles):
-                if len(sa[1]) > 50:
-                    self.areas.append(sa[0])
-
             f.seek(0)
             for i in content:
                 i_ymin = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[2])
                 i_ymax = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[3])
-                for (ymin, ymax) in self.areas:
-                    if ymin <= i_ymin and i_ymax <= ymax:
-                        f.write(i)
-                        break
-                f.truncate()
-            f.close()
+                if ymin <= i_ymin and i_ymax <= ymax:
+                    f.write(i)
+            f.truncate()
 
     def _unite_coordinates(self, coordinates_list):
         """
@@ -735,6 +638,9 @@ class AutoSubtitleExtractor():
                abs(coordinate1[3] - coordinate2[3]) < config.PIXEL_TOLERANCE_Y
 
     def delete_frame_cache(self):
-        if len(os.listdir(self.frame_output_dir)) > 0:
-            for i in os.listdir(self.frame_output_dir):
-                os.remove(os.path.join(self.frame_output_dir, i))
+        import shutil
+        shutil.rmtree(self.frame_output_dir)
+
+        # if len(os.listdir(self.frame_output_dir)) > 0:
+        #     for i in os.listdir(self.frame_output_dir):
+        #         os.remove(os.path.join(self.frame_output_dir, i))
