@@ -365,7 +365,18 @@ class AutoSubtitleExtractor():
 
                 # 按指定分割来分场景出来
                 if len(split_spans) > 0:
-                    cur_split_lines += frame_content
+                    # 需要在拼接前去除重复
+                    # 我要这个\n少湘菜排队王 排队人王 你要这个是吗\n少湘菜排队王 排队人王\n沙湘菜排队王 排队王 好那你们跟我来\n 这种需要去重后再引入
+                    phrases = set()
+                    if len(cur_split_lines) > 0:
+                        for line in cur_split_lines.split("\n"):
+                            for part in line.split(" "):
+                                phrases.add(part.strip())
+
+                    for part in frame_content.split(" "):
+                        if not part.replace("\n", "") in phrases:
+                            cur_split_lines += " " + part
+
                     if frame_no_end >= split_spans[last_span_no] and last_span_no < len(split_spans):
                         split_vd_filename = os.path.join(self.temp_output_dir,
                                                          os.path.split(self.video_path)[1] + "_" + str(
@@ -394,7 +405,8 @@ class AutoSubtitleExtractor():
                     print(f"cut video {last_span_frame} to {frame_no_end}")
                     cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
                               frame_no_end / self.fps)
-                    self.scenes[i] = [self._frame_to_timecode(last_span_frame), self._frame_to_timecode(frame_no_end), "",
+                    self.scenes[i] = [self._frame_to_timecode(last_span_frame), self._frame_to_timecode(frame_no_end),
+                                      "",
                                       split_vd_filename]
 
         print(f"{interface_config['Main']['SubLocation']} {srt_filename}")
