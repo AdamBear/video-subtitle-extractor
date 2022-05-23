@@ -62,6 +62,14 @@ def is_all_english_char(sentence):
     return True
 
 
+def is_float(test_string):
+    try:
+        float(test_string)
+        return True
+    except:
+        return False
+
+
 def get_split_spans(splits, fps, frame_count):
     split_spans = []
     # 分段分割出视频
