@@ -83,11 +83,14 @@ def get_split_spans(splits, fps, frame_count):
             if end_frame < last_end_frame:
                 return None
 
-            if end_frame > frame_count:
+            if end_frame >= frame_count:
                 split_spans.append(frame_count)
                 return split_spans
             last_end_frame = end_frame
             split_spans.append(end_frame)
+
+        if last_end_frame < frame_count:
+            split_spans.append(frame_count)
 
         return split_spans
 
@@ -139,7 +142,8 @@ class AutoSubtitleExtractor():
         self.detect_subtitle = True
         self.detect_scene = True
         self.no_cut = True
-        self.splits = []
+        self.splits = ""
+        self.split_spans = []
         self.scenes = []
 
         # 字幕区域位置
@@ -342,6 +346,7 @@ class AutoSubtitleExtractor():
             last_span_no = 0
             last_span_frame = 1
             split_spans = get_split_spans(self.splits, self.fps, self.frame_count)
+            self.split_spans = split_spans
             self.scenes = [[] for _ in range(len(split_spans))]
 
         with open(srt_filename, mode='w', encoding='utf-8') as f:
@@ -387,9 +392,9 @@ class AutoSubtitleExtractor():
                         if not part.replace("\n", "") in phrases:
                             cur_split_lines += " " + part
 
-                    if frame_no_end >= split_spans[last_span_no] and last_span_no < len(split_spans):
+                    if last_span_no < len(split_spans) and frame_no_end >= split_spans[last_span_no]:
                         # 此处有需要跳过部分无字幕的部分场景分段，使last_span_no增大跨度
-                        while frame_no_end >= split_spans[last_span_no + 1] and last_span_no + 1 < len(split_spans):
+                        while last_span_no + 1 < len(split_spans) and frame_no_end >= split_spans[last_span_no + 1]:
                             last_span_no += 1
                             if last_span_frame < int(split_spans[last_span_no - 1]):
                                 last_span_frame = int(split_spans[last_span_no - 1])
@@ -436,8 +441,12 @@ class AutoSubtitleExtractor():
                     if not os.path.isfile(split_cover_filename):
                         export_cover(split_vd_filename, split_cover_filename)
 
+                    subtitles = ""
+                    if i == len(self.scenes) - 1 and len(cur_split_lines) > 0:
+                        subtitles = cur_split_lines
+
                     self.scenes[i] = [self._frame_to_timecode(last_span_frame), self._frame_to_timecode(frame_no_end),
-                                      "",
+                                      subtitles,
                                       split_vd_filename,
                                       split_cover_filename,
                                       (frame_no_end - last_span_frame) / self.fps]
