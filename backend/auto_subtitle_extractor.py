@@ -105,12 +105,23 @@ def get_split_spans(splits, fps, frame_count):
 
 
 def cut_video(input_mp4, output_mp4, start, end, debug=False):
-    cmd = f'ffmpeg -y -ss {start} -to {end} -i {input_mp4}  {output_mp4}'
+    cmd = f'ffmpeg -loglevel quiet -y -ss {start} -to {end} -i {input_mp4}  {output_mp4}'
     r = os.system(cmd)
     if debug:
         print(cmd)
     if r == 0:
         return output_mp4
+    else:
+        return ""
+
+
+def export_cover(input_mp4, output_jpeg, debug=False):
+    cmd = f'ffmpeg -loglevel quiet -y -i {input_mp4} -f image2 -frames 1 {output_jpeg}'
+    r = os.system(cmd)
+    if debug:
+        print(cmd)
+    if r == 0:
+        return output_jpeg
     else:
         return ""
 
@@ -366,7 +377,6 @@ class AutoSubtitleExtractor():
                 # 按指定分割来分场景出来
                 if len(split_spans) > 0:
                     # 需要在拼接前去除重复
-                    # 我要这个\n少湘菜排队王 排队人王 你要这个是吗\n少湘菜排队王 排队人王\n沙湘菜排队王 排队王 好那你们跟我来\n 这种需要去重后再引入
                     phrases = set()
                     if len(cur_split_lines) > 0:
                         for line in cur_split_lines.split("\n"):
@@ -378,14 +388,28 @@ class AutoSubtitleExtractor():
                             cur_split_lines += " " + part
 
                     if frame_no_end >= split_spans[last_span_no] and last_span_no < len(split_spans):
+                        # 此处有需要跳过部分无字幕的部分场景分段，使last_span_no增大跨度
+                        while frame_no_end >= split_spans[last_span_no + 1] and last_span_no + 1 < len(split_spans):
+                            last_span_no += 1
+                            if last_span_frame < int(split_spans[last_span_no - 1]):
+                                last_span_frame = int(split_spans[last_span_no - 1])
+
                         split_vd_filename = os.path.join(self.temp_output_dir,
                                                          os.path.split(self.video_path)[1] + "_" + str(
                                                              last_span_frame) + "_" + str(frame_no_end) + ".mp4")
+                        split_cover_filename = split_vd_filename[:-4] + ".jpg"
+
                         print(f"cut video {last_span_frame} to {frame_no_end}")
-                        cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
-                                  frame_no_end / self.fps)
+
+                        if not os.path.isfile(split_vd_filename):
+                            cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
+                                      frame_no_end / self.fps)
+                        if not os.path.isfile(split_cover_filename):
+                            export_cover(split_vd_filename, split_cover_filename)
+
                         self.scenes[last_span_no] = [self._frame_to_timecode(last_span_frame), frame_end,
-                                                     cur_split_lines, split_vd_filename]
+                                                     cur_split_lines, split_vd_filename, split_cover_filename,
+                                                     (frame_no_end - last_span_frame) / self.fps]
                         cur_split_lines = ""
                         last_span_no += 1
                         last_span_frame = frame_no_end
@@ -396,18 +420,27 @@ class AutoSubtitleExtractor():
                     if i == 0:
                         last_span_frame = 1
                     else:
-                        last_span_frame = split_spans[i - 1]
+                        last_span_frame = int(split_spans[i - 1])
 
-                    frame_no_end = split_spans[i]
+                    frame_no_end = int(split_spans[i])
                     split_vd_filename = os.path.join(self.temp_output_dir,
                                                      os.path.split(self.video_path)[1] + "_" + str(
                                                          last_span_frame) + "_" + str(frame_no_end) + ".mp4")
+                    split_cover_filename = split_vd_filename[:-4] + ".jpg"
+
                     print(f"cut video {last_span_frame} to {frame_no_end}")
-                    cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
-                              frame_no_end / self.fps)
+
+                    if not os.path.isfile(split_vd_filename):
+                        cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
+                                  frame_no_end / self.fps)
+                    if not os.path.isfile(split_cover_filename):
+                        export_cover(split_vd_filename, split_cover_filename)
+
                     self.scenes[i] = [self._frame_to_timecode(last_span_frame), self._frame_to_timecode(frame_no_end),
                                       "",
-                                      split_vd_filename]
+                                      split_vd_filename,
+                                      split_cover_filename,
+                                      (frame_no_end - last_span_frame) / self.fps]
 
         print(f"{interface_config['Main']['SubLocation']} {srt_filename}")
 
@@ -419,6 +452,7 @@ class AutoSubtitleExtractor():
                 f.append(org_filename)
                 f.append(str(f[2]).zfill(8) + ".jpg")
 
+        # self.split_spans = split_spans
         return processed_subtitle
 
     def _frame_preprocess(self, frame):
