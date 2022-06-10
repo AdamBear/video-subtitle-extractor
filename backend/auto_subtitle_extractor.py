@@ -340,6 +340,7 @@ class AutoSubtitleExtractor():
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
 
+        # todo: auto_split的需要调用asr的声音分割处理
         split_spans = []
         if len(self.splits) > 0:
             cur_split_lines = ""
@@ -573,8 +574,6 @@ class AutoSubtitleExtractor():
                     continue
         return unique_subtitle_list
 
-        # 需要返回特别重复的台标或水印位置
-
     def _remove_too_common(self):
         """
         将raw txt文本中具有相同帧号的字幕行合并
@@ -599,7 +598,7 @@ class AutoSubtitleExtractor():
         self.too_commons = set()
         self.counter = Counter(contents).most_common()
         for c in self.counter:
-            if c[1] > max_common_count:
+            if c[1] > max_common_count and len(c[0]) < 12:
                 self.too_commons.add(c[0])
             else:
                 break
@@ -625,7 +624,7 @@ class AutoSubtitleExtractor():
             contents.append(content)
             content_list.append([frame_no, coordinate, content])
 
-            # 找出那些不止一行的帧号
+        # 找出那些不止一行的帧号
         frame_no_list = [i[0] for i in Counter(frame_no_list).most_common() if i[1] > 1]
 
         # 找出这些帧号出现的位置
@@ -641,7 +640,13 @@ class AutoSubtitleExtractor():
                 txt = txt.replace(" ", "").replace('\n', '')
                 # 全部是英文的不要处理，过短的不要处理，一般都是识别错误
                 if not is_all_english_char(txt) and len(txt) > 2:
-                    content.append(txt)
+                    if len(content) < 9:
+                        pos = content_list[j][1].split('(')[1].split(')')[0].split(', ')
+                        pos_center = int(pos[0]) + int((int(pos[1]) - int(pos[0])) / 2)
+                        if pos_center > self.frame_width / 2 - 150 and pos_center < self.frame_width / 2 + 150:
+                            content.append(txt)
+                    else:
+                        content.append(txt)
 
             content = ' '.join(content) + '\n'
             for k in i[1]:
@@ -664,8 +669,19 @@ class AutoSubtitleExtractor():
 
         with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
             for frame_no, coordinate, content in content_list:
-                content = unicodedata.normalize('NFKC', content)
-                f.write(f'{frame_no}\t{coordinate}\t{content}')
+                skip = False
+                if len(content) < 9:
+                    # coordinate = content_list[j][1]
+                    pos = coordinate.split('(')[1].split(')')[0].split(', ')
+                    pos_center = int(pos[0]) + int((int(pos[1]) - int(pos[0])) / 2)
+                    if pos_center > self.frame_width / 2 - 150 and pos_center < self.frame_width / 2 + 150:
+                        content = unicodedata.normalize('NFKC', content)
+                    else:
+                        skip = True
+                else:
+                    content = unicodedata.normalize('NFKC', content)
+                if not skip:
+                    f.write(f'{frame_no}\t{coordinate}\t{content}')
 
     def _detect_watermark_area(self):
         """
@@ -748,6 +764,7 @@ class AutoSubtitleExtractor():
 
                 area_subtitles.append(((ymin, ymax), set()))
 
+                # todo: 这里可以再加一个判断，对于整体长度和位置的
                 for i in content:
                     i_ymin = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[2])
                     i_ymax = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[3])
@@ -756,8 +773,11 @@ class AutoSubtitleExtractor():
 
             self.areas = []
             for i, sa in enumerate(area_subtitles):
-                if len(sa[1]) > 50:
+                if len(sa[1]) > 50 and len(self.areas) < 3:
                     self.areas.append(sa[0])
+
+            if len(self.areas) == 0:
+                self.areas.append(area_subtitles[0][0])
 
             f.seek(0)
             for i in content:
