@@ -278,30 +278,29 @@ class AutoSubtitleExtractor():
         if os.path.exists(self.raw_subtitle_path):
             os.remove(self.raw_subtitle_path)
         # 新建文件
-        f = open(self.raw_subtitle_path, mode='w+', encoding='utf-8')
+        with open(self.raw_subtitle_path, mode='w+', encoding='utf-8') as f:
+            # 视频帧列表
+            frame_list = [i for i in sorted(os.listdir(self.frame_output_dir)) if i.endswith('.jpg')]
+            image_file_list = [os.path.join(self.frame_output_dir, i).replace("\\", "/") for i in frame_list]
 
-        # 视频帧列表
-        frame_list = [i for i in sorted(os.listdir(self.frame_output_dir)) if i.endswith('.jpg')]
-        image_file_list = [os.path.join(self.frame_output_dir, i).replace("\\", "/") for i in frame_list]
+            rec_result = post_to_recognize(image_file_list)
 
-        rec_result = post_to_recognize(image_file_list)
+            for i, (frame, rec_ret) in enumerate(zip(frame_list, rec_result["results"])):
+                dt_box = [r["text_region"] for r in rec_ret]
+                rec_res = [(r["text"], r["confidence"]) for r in rec_ret]
+                coordinates = self._get_coordinates(dt_box)
 
-        for i, (frame, rec_ret) in enumerate(zip(frame_list, rec_result["results"])):
-            dt_box = [r["text_region"] for r in rec_ret]
-            rec_res = [(r["text"], r["confidence"]) for r in rec_ret]
-            coordinates = self._get_coordinates(dt_box)
+                # 写入返回结果
+                for content, coordinate in zip(rec_res, coordinates):
+                    if content[1] > config.DROP_SCORE:
+                        f.write(f'{os.path.splitext(frame)[0]}\t'
+                                f'{coordinate}\t'
+                                f'{content[0]}\n')
+                        # 关闭文件
+            f.close()
 
-            # 写入返回结果
-            for content, coordinate in zip(rec_res, coordinates):
-                if content[1] > config.DROP_SCORE:
-                    f.write(f'{os.path.splitext(frame)[0]}\t'
-                            f'{coordinate}\t'
-                            f'{content[0]}\n')
-                    # 关闭文件
-        f.close()
-
-        if self.debug:
-            shutil.copyfile(self.raw_subtitle_path, self.raw_subtitle_path + ".raw.txt")
+            if self.debug:
+                shutil.copyfile(self.raw_subtitle_path, self.raw_subtitle_path + ".raw.txt")
 
     def find_scenes(self, threshold=30.0):
         # Create our video & scene managers, then add the detector.
@@ -690,40 +689,40 @@ class AutoSubtitleExtractor():
         根据坐标点信息，进行统计，将一直具有固定坐标的文本区域选出
         :return 返回最有可能的水印区域
         """
-        f = open(self.raw_subtitle_path, mode='r', encoding='utf-8')  # 打开txt文件，以‘utf-8’编码读取
-        line = f.readline()  # 以行的形式进行读取文件
-        # 坐标点列表
-        coordinates_list = []
-        # 帧列表
-        frame_no_list = []
-        # 内容列表
-        content_list = []
-        while line:
-            frame_no = line.split('\t')[0]
-            text_position = line.split('\t')[1].split('(')[1].split(')')[0].split(', ')
-            content = line.split('\t')[2]
-            frame_no_list.append(frame_no)
-            coordinates_list.append((int(text_position[0]),
-                                     int(text_position[1]),
-                                     int(text_position[2]),
-                                     int(text_position[3])))
-            content_list.append(content)
-            line = f.readline()
-        f.close()
-        # 将坐标列表的相似值统一
-        coordinates_list = self._unite_coordinates(coordinates_list)
+        with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as f:  # 打开txt文件，以‘utf-8’编码读取
+            line = f.readline()  # 以行的形式进行读取文件
+            # 坐标点列表
+            coordinates_list = []
+            # 帧列表
+            frame_no_list = []
+            # 内容列表
+            content_list = []
+            while line:
+                frame_no = line.split('\t')[0]
+                text_position = line.split('\t')[1].split('(')[1].split(')')[0].split(', ')
+                content = line.split('\t')[2]
+                frame_no_list.append(frame_no)
+                coordinates_list.append((int(text_position[0]),
+                                         int(text_position[1]),
+                                         int(text_position[2]),
+                                         int(text_position[3])))
+                content_list.append(content)
+                line = f.readline()
+            f.close()
+            # 将坐标列表的相似值统一
+            coordinates_list = self._unite_coordinates(coordinates_list)
 
-        # 将原txt文件的坐标更新为归一后的坐标
-        with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
-            for frame_no, coordinate, content in zip(frame_no_list, coordinates_list, content_list):
-                f.write(f'{frame_no}\t{coordinate}\t{content}')
+            # 将原txt文件的坐标更新为归一后的坐标
+            with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
+                for frame_no, coordinate, content in zip(frame_no_list, coordinates_list, content_list):
+                    f.write(f'{frame_no}\t{coordinate}\t{content}')
 
-        if len(Counter(coordinates_list).most_common()) > config.WATERMARK_AREA_NUM:
-            # 读取配置文件，返回可能为水印区域的坐标列表
-            return Counter(coordinates_list).most_common(config.WATERMARK_AREA_NUM)
-        else:
-            # 不够则有几个返回几个
-            return Counter(coordinates_list).most_common()
+            if len(Counter(coordinates_list).most_common()) > config.WATERMARK_AREA_NUM:
+                # 读取配置文件，返回可能为水印区域的坐标列表
+                return Counter(coordinates_list).most_common(config.WATERMARK_AREA_NUM)
+            else:
+                # 不够则有几个返回几个
+                return Counter(coordinates_list).most_common()
 
     def _detect_subtitle_area(self):
         """
@@ -732,16 +731,16 @@ class AutoSubtitleExtractor():
         :return 返回字幕的区域位置
         """
         # 打开去水印区域处理过的raw txt
-        f = open(self.raw_subtitle_path, mode='r', encoding='utf-8')  # 打开txt文件，以‘utf-8’编码读取
-        line = f.readline()  # 以行的形式进行读取文件
-        # y坐标点列表
-        y_coordinates_list = []
-        while line:
-            text_position = line.split('\t')[1].split('(')[1].split(')')[0].split(', ')
-            y_coordinates_list.append((int(text_position[2]), int(text_position[3])))
-            line = f.readline()
-        f.close()
-        return Counter(y_coordinates_list).most_common(5)
+        with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as f:  # 打开txt文件，以‘utf-8’编码读取
+            line = f.readline()  # 以行的形式进行读取文件
+            # y坐标点列表
+            y_coordinates_list = []
+            while line:
+                text_position = line.split('\t')[1].split('(')[1].split(')')[0].split(', ')
+                y_coordinates_list.append((int(text_position[2]), int(text_position[3])))
+                line = f.readline()
+            f.close()
+            return Counter(y_coordinates_list).most_common(5)
 
     def filter_scene_text(self):
         # 检查水印区域，并处理区域合并
