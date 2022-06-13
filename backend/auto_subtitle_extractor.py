@@ -92,6 +92,9 @@ def get_split_spans(splits, fps, frame_count):
         if last_end_frame < frame_count:
             split_spans.append(frame_count)
 
+        if len(split_spans) > 0 and int(split_spans[0]) == 0:
+            return split_spans[1:]
+
         return split_spans
 
     elif is_float(splits.strip()):
@@ -414,11 +417,12 @@ class AutoSubtitleExtractor():
 
                         self.scenes[last_span_no] = [self._frame_to_timecode(last_span_frame), frame_end,
                                                      cur_split_lines, split_vd_filename, split_cover_filename,
-                                                     (frame_no_end - last_span_frame) / self.fps]
+                                                     (frame_no_end - last_span_frame) / self.fps, frame_no_end]
                         cur_split_lines = ""
                         last_span_no += 1
                         last_span_frame = frame_no_end
 
+        # 补上空白视频位置和最后的尾部字幕
         if len(split_spans) > 0:
             for i in range(len(self.scenes)):
                 if len(self.scenes[i]) == 0:
@@ -426,6 +430,9 @@ class AutoSubtitleExtractor():
                         last_span_frame = 1
                     else:
                         last_span_frame = int(split_spans[i - 1])
+                        last_scenes_end_frame_no = int(self.scenes[i - 1][6])
+                        if last_scenes_end_frame_no > last_span_frame:
+                            last_span_frame = last_scenes_end_frame_no
 
                     frame_no_end = int(split_spans[i])
                     split_vd_filename = os.path.join(self.temp_output_dir,
@@ -449,7 +456,7 @@ class AutoSubtitleExtractor():
                                       subtitles,
                                       split_vd_filename,
                                       split_cover_filename,
-                                      (frame_no_end - last_span_frame) / self.fps]
+                                      (frame_no_end - last_span_frame) / self.fps, frame_no_end]
 
         print(f"{interface_config['Main']['SubLocation']} {srt_filename}")
 
