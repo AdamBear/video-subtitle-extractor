@@ -143,7 +143,7 @@ class AutoSubtitleExtractor():
         self.debug = False
         self.remove_too_common = True
         self.detect_subtitle = True
-        self.detect_scene = True
+        self.detect_scene = False
         self.no_cut = True
         self.splits = ""
         self.split_spans = []
