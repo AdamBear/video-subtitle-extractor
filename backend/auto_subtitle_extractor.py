@@ -340,6 +340,8 @@ class AutoSubtitleExtractor():
 
         subtitle_content = self._remove_duplicate_subtitle()
 
+        print("subtitle has prepared!")
+
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
 
@@ -758,6 +760,8 @@ class AutoSubtitleExtractor():
 
         # 统计比较前5个，取字符数量最多的前两个加入到最终的字幕中
         subtile_areas = self._detect_subtitle_area()
+
+        print("subtitle area detected:" + str(len(subtile_areas)))
 
         with open(self.raw_subtitle_path, mode='r+', encoding='utf-8') as f:
             content = f.readlines()
