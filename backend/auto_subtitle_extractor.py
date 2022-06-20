@@ -783,16 +783,22 @@ class AutoSubtitleExtractor():
                     self.areas.append(sa[0])
 
             if len(self.areas) == 0:
-                self.areas.append(area_subtitles[0][0])
+                if len(area_subtitles) > 0:
+                    self.areas.append(area_subtitles[0][0])
+
 
             f.seek(0)
             for i in content:
                 i_ymin = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[2])
                 i_ymax = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[3])
-                for (ymin, ymax) in self.areas:
-                    if ymin <= i_ymin and i_ymax <= ymax:
-                        f.write(i)
-                        break
+                if len(self.areas) > 0:
+                    for (ymin, ymax) in self.areas:
+                        if ymin <= i_ymin and i_ymax <= ymax:
+                            f.write(i)
+                            break
+                else:
+                    f.write(i)
+
                 f.truncate()
             f.close()
 
