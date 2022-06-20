@@ -140,6 +140,7 @@ class AutoSubtitleExtractor():
     def __init__(self, vd_path, export_key_frames):
         self.sub_area = None
         self.export_key_frames = export_key_frames
+        self.export_cut_video = True
         self.debug = False
         self.remove_too_common = True
         self.detect_subtitle = True
@@ -409,11 +410,12 @@ class AutoSubtitleExtractor():
 
                         print(f"cut video {last_span_frame} to {frame_no_end}")
 
-                        if not os.path.isfile(split_vd_filename):
-                            cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
-                                      frame_no_end / self.fps)
-                        if not os.path.isfile(split_cover_filename):
-                            export_cover(split_vd_filename, split_cover_filename)
+                        if self.export_cut_video:
+                            if not os.path.isfile(split_vd_filename):
+                                cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
+                                          frame_no_end / self.fps)
+                            if not os.path.isfile(split_cover_filename):
+                                export_cover(split_vd_filename, split_cover_filename)
 
                         self.scenes[last_span_no] = [self._frame_to_timecode(last_span_frame), frame_end,
                                                      cur_split_lines, split_vd_filename, split_cover_filename,
