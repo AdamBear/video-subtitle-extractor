@@ -345,6 +345,8 @@ class AutoSubtitleExtractor():
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
 
+        print(f"splits:{self.splits}, fps:{self.fps}, frame_count:{self.frame_count}")
+
         # todo: auto_split的需要调用asr的声音分割处理
         split_spans = []
         if len(self.splits) > 0:
@@ -354,6 +356,7 @@ class AutoSubtitleExtractor():
             split_spans = get_split_spans(self.splits, self.fps, self.frame_count)
             self.split_spans = split_spans
             self.scenes = [[] for _ in range(len(split_spans))]
+
 
         with open(srt_filename, mode='w', encoding='utf-8') as f:
             for index, content in enumerate(subtitle_content):
