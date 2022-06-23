@@ -86,6 +86,8 @@ def get_split_spans(splits, fps, frame_count):
             if end_frame >= frame_count:
                 split_spans.append(frame_count)
                 return split_spans
+            if end_frame - last_end_frame < fps:
+                continue
             last_end_frame = end_frame
             split_spans.append(end_frame)
 
@@ -100,7 +102,7 @@ def get_split_spans(splits, fps, frame_count):
     elif is_float(splits.strip()):
         span = float(splits.strip())
         i = 1
-        while i * span * fps < frame_count:
+        while i * span * fps < frame_count and span > 0:
             split_spans.append(i * span * fps)
             i += 1
 
@@ -331,7 +333,7 @@ class AutoSubtitleExtractor():
             scenes_codes = self.find_scenes()
             self.scenes = [[] for i in range(len(scenes_codes))]
 
-            # 先检测并删除可能的台标或者背景，然后才能，所以需要考虑
+        # 先检测并删除可能的台标或者背景，然后才能，所以需要考虑
         if self.remove_too_common:
             self._remove_too_common()
 
@@ -339,8 +341,6 @@ class AutoSubtitleExtractor():
             self.filter_scene_text()
 
         subtitle_content = self._remove_duplicate_subtitle()
-
-        print("subtitle has prepared!")
 
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
