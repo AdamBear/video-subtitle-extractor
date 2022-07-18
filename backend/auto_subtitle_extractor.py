@@ -602,7 +602,7 @@ class AutoSubtitleExtractor():
             frame_no = line.split('\t')[0]
             coordinate = line.split('\t')[1]
             content = line.split('\t')[2]
-            if content.startswith("抖音号:"):
+            if content.strip().startswith("抖音号:"):
                 continue
             frame_no_list.append(frame_no)
             contents.append(content)
