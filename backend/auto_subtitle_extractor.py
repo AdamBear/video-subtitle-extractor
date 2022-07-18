@@ -600,9 +600,11 @@ class AutoSubtitleExtractor():
         contents = []
         for line in lines:
             frame_no = line.split('\t')[0]
-            frame_no_list.append(frame_no)
             coordinate = line.split('\t')[1]
             content = line.split('\t')[2]
+            if content.startswith("抖音号:"):
+                continue
+            frame_no_list.append(frame_no)
             contents.append(content)
             content_list.append([frame_no, coordinate, content])
 
