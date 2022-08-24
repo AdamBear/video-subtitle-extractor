@@ -18,18 +18,17 @@ from scenedetect import VideoManager
 from scenedetect import SceneManager
 from PIL import Image
 
-import os
-
-asr_executor = None
-
 import librosa
 import numpy as np
 import paddle
 
 from paddlespeech.cli.asr import ASRExecutor
+from paddlespeech.s2t.utils.utility import UpdateConfig
 
 from pyvad import split
 import copy
+from paddlenlp import Taskflow
+import paddlehub as hub
 
 """
 use pyvad to split the audio and get the time-stampped ASR result
@@ -37,6 +36,59 @@ see https://github.com/F-Tag/python-vad
 need install pyvad first:
 $ pip install pyvad
 """
+
+splitted_asr_executor, text_correct_model, punc_model = None, None, None
+
+
+def get_models():
+    # asr_model = hub.Module(name='u2_conformer_aishell')
+    splitted_asr_executor = SplitASRExecutor()
+    text_correct_model = Taskflow("text_correction")
+    punc_model = hub.Module(name='auto_punc')
+    return splitted_asr_executor, text_correct_model, punc_model
+
+
+def get_wav(input_file, ar=48000):
+    output_file = input_file + "_mono_{}k.wav".format(int(ar / 1000))
+    cmd = f"ffmpeg -y -loglevel quiet -i {input_file} -acodec pcm_s16le -ac 1 -ar {ar} {output_file}"
+    ret = os.system(cmd)
+    if ret == 0:
+        return output_file
+    else:
+        return ""
+
+
+def extract_audio(source: str, srate=16000):
+    return get_wav(source, srate)
+
+
+def speech_recognize(file):
+    global splitted_asr_executor, text_correct_model, punc_model
+    if not splitted_asr_executor:
+        splitted_asr_executor, text_correct_model, punc_model = get_models()
+
+    # text = asr_model.speech_recognize(file, device='cpu')
+    splitted_timelines, ret = splitted_asr_executor(model='conformer_wenetspeech',
+                                                    lang='zh',
+                                                    sample_rate=16000,
+                                                    config=None,
+                                                    # Set config and ckpt_path to None to use pretrained model.
+                                                    ckpt_path=None,
+                                                    decode_method='attention_rescoring',
+                                                    audio_file=file,
+                                                    force_yes=False,
+                                                    device=paddle.get_device(),
+                                                    verbose=False)
+
+    punc_ret = []
+    for text, t in zip(ret, splitted_timelines):
+        text_correction = text_correct_model(text)[0]
+        cor_text, errors = text_correction['target'], text_correction['errors']
+        print(f'[Text Correction] errors: {errors}')
+        punc_text = punc_model.add_puncs(cor_text, device='cpu')[0]
+        punc_ret.append([t[0], t[1], punc_text])
+
+    return punc_ret
 
 
 def vad_split(audio_file, srate=16000):
@@ -105,9 +157,10 @@ def split_audio(inputs, splitted_timelines):
 
 class SplitASRExecutor(ASRExecutor):
     def __init__(self):
-        super(SplitASRExecutor, self).__init__()
+        super().__init__()
+        self.change_format = False
 
-    def postprocess(self) -> Union[str, os.PathLike]:
+    def postprocess(self):
         """
             Output postprocess and return human-readable results such as texts and audio files.
         """
@@ -120,7 +173,10 @@ class SplitASRExecutor(ASRExecutor):
                  sample_rate: int = 16000,
                  config: os.PathLike = None,
                  ckpt_path: os.PathLike = None,
+                 decode_method: str = 'attention_rescoring',
+                 num_decoding_left_chunks: int = -1,
                  force_yes: bool = False,
+                 rtf: bool = False,
                  device=paddle.get_device(),
                  verbose=False):
 
@@ -130,10 +186,12 @@ class SplitASRExecutor(ASRExecutor):
         """
         Python API to call an executor.
         """
-        audio_file = os.path.abspath(audio_file)
-        self._check(audio_file, sample_rate, force_yes)
+        # self._check(audio_file, sample_rate, force_yes)
         paddle.set_device(device)
-        self._init_from_path(model, lang, sample_rate, config, ckpt_path)
+        self._init_from_path(model, lang, sample_rate, config, decode_method,
+                             num_decoding_left_chunks, ckpt_path)
+
+        audio_file = os.path.abspath(audio_file)
         self.preprocess(model, audio_file)
 
         self._inputs["full_audio"] = self._inputs["audio"]
@@ -151,32 +209,13 @@ class SplitASRExecutor(ASRExecutor):
             for audio, audio_len in split_audio(self._inputs, self.splitted_timelines):
                 self._inputs["audio"] = audio
                 self._inputs["audio_len"] = audio_len
-                self.infer(model)
+                self.infer(model_type="conformer_wenetspeech")
                 ret.append(self._outputs["result"])
         else:
-            self.infer(model)
+            self.infer(model_type="conformer_wenetspeech")
             ret.append(self._outputs["result"])
 
         return self.splitted_timelines, ret
-
-
-def speech_recognize(filename):
-    global asr_executor
-    if asr_executor is None:
-        asr_executor = MyASRExecutor()
-    asr_file = get_wav(filename, ar=16000)
-    text = asr_executor(
-        model='conformer_wenetspeech',
-        lang='zh',
-        sample_rate=16000,
-        config=None,  # Set config and ckpt_path to None to use pretrained model.
-        ckpt_path=None,
-        audio_file=asr_file,
-        force_yes=False,
-        device=paddle.get_device(),
-        verbose=True)
-    os.remove(asr_file)
-    return text
 
 
 def post_to_recognize(image_file_list):
@@ -309,6 +348,7 @@ class AutoSubtitleExtractor():
         self.splits = ""
         self.split_spans = []
         self.scenes = []
+        self.asr_only = False
 
         # 字幕区域位置
         self.subtitle_area = config.SubtitleArea.LOWER_PART
@@ -349,6 +389,11 @@ class AutoSubtitleExtractor():
         self.progress = 0
 
     def run(self):
+
+        if self.asr_only:
+            self.export_key_frames = False
+            self.detect_scene = False
+            return self.generate_asr_subtitle()
 
         # 指定分割点时不输出关键帧，不检查场景
         if len(self.splits) > 0:
@@ -1021,3 +1066,56 @@ class AutoSubtitleExtractor():
         if len(os.listdir(self.frame_output_dir)) > 0:
             for i in os.listdir(self.frame_output_dir):
                 os.remove(os.path.join(self.frame_output_dir, i))
+
+    def generate_asr_subtitle(self):
+        """
+        使用ASR方法来生成srt格式的字幕文件
+        """
+        srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
+        processed_subtitle = []
+
+        print(f"splits:{self.splits}, fps:{self.fps}, frame_count:{self.frame_count}")
+
+        save_path = extract_audio(self.video_path)
+        ret = speech_recognize(save_path)
+        # [[0.0, 2.86, '对于今年的市场销售，做了一个规划。'], [2.86, 6.7406875, '我个人也是对这次的方案进行了一个全面的策划。']]
+
+        self.split_spans = [[r[0] * self.fps, r[1] * self.fps] for r in ret]
+        self.scenes = [[] for _ in range(len(ret))]
+
+        last_span_frame = 1
+        last_span_no = 0
+        with open(srt_filename, mode='w', encoding='utf-8') as f:
+            for index, content in enumerate(ret):
+                line_code = index + 1
+                frame_no_start = int(content[0] * self.fps)
+                frame_start = self._frame_to_timecode(frame_no_start)
+                frame_no_end = int(content[1] * self.fps)
+                frame_end = self._frame_to_timecode(frame_no_end)
+                frame_content = content[2]
+                processed_subtitle.append([frame_start, frame_end, frame_no_start, frame_no_end, frame_content])
+                subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n'
+                f.write(subtitle_line)
+
+                if self.export_cut_video:
+                    split_vd_filename = os.path.join(self.temp_output_dir,
+                                                     os.path.split(self.video_path)[1] + "_" + str(
+                                                         last_span_frame) + "_" + str(frame_no_end) + ".mp4")
+                    split_cover_filename = split_vd_filename[:-4] + ".jpg"
+
+                    print(f"cut video {last_span_frame} to {frame_no_end}")
+
+                    if not os.path.isfile(split_vd_filename):
+                        cut_video(self.video_path, split_vd_filename, last_span_frame / self.fps,
+                                  frame_no_end / self.fps)
+                    if not os.path.isfile(split_cover_filename):
+                        export_cover(split_vd_filename, split_cover_filename)
+
+                    self.scenes[last_span_no] = [self._frame_to_timecode(last_span_frame), frame_end,
+                                                 frame_content, split_vd_filename, split_cover_filename,
+                                                 (frame_no_end - last_span_frame) / self.fps, frame_no_end]
+
+                    last_span_no += 1
+                    last_span_frame = frame_no_end
+
+        return processed_subtitle
