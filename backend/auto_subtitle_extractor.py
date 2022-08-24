@@ -20,6 +20,164 @@ from PIL import Image
 
 import os
 
+asr_executor = None
+
+import librosa
+import numpy as np
+import paddle
+
+from paddlespeech.cli.asr import ASRExecutor
+
+from pyvad import split
+import copy
+
+"""
+use pyvad to split the audio and get the time-stampped ASR result
+see https://github.com/F-Tag/python-vad
+need install pyvad first:
+$ pip install pyvad
+"""
+
+
+def vad_split(audio_file, srate=16000):
+    data, fs = librosa.load(audio_file)
+    data = librosa.resample(data, fs, srate)
+    data *= 0.95 / np.abs(data).max()
+    edges = split(data, srate, fs_vad=srate, hop_length=20, vad_mode=3)
+    return data, edges
+
+
+def get_splitted_timelines(data, edges, srate):
+    # fix the begin and end vad frames pos
+    edges = copy.deepcopy(edges)
+    total_len = len(data)
+    edges[len(edges) - 1][1] = total_len - 1
+    edges[0][0] = 0
+
+    if len(edges) == 1:
+        time_line_pos = [edges[0][0], edges[0][1], edges[0][0], edges[0][1], edges[0][1] - edges[0][0]]
+        return [[pos / srate for pos in time_line_pos]]
+
+    # merge too short vad frames(less than 1 seconds)
+    new_edges = [edges[0]]
+    for i in range(1, len(edges)):
+        if edges[i][1] - edges[i][0] < srate:
+            new_edges[len(new_edges) - 1][1] = edges[i][1]
+        else:
+            new_edges.append(edges[i])
+
+    edges = new_edges
+
+    # split at the middle of tow vad edge frames
+    time_lines = []
+    for i in range(len(edges)):
+        if i == 0:
+            time_line_pos = [edges[i][0], edges[i][1] + (edges[i + 1][0] - edges[i][1]) / 2,
+                             edges[i][0], edges[i][1], edges[i][1] - edges[i][0] + (edges[i + 1][0] - edges[i][1]) / 2]
+        elif 0 < i < len(edges) - 1:
+            time_line_pos = [edges[i][0] - (edges[i][0] - edges[i - 1][1]) / 2,
+                             edges[i][1] + (edges[i + 1][0] - edges[i][1]) / 2,
+                             edges[i][0], edges[i][1],
+                             edges[i][1] - edges[i][0] + (edges[i][0] - edges[i - 1][1]) / 2 + (
+                                     edges[i + 1][0] - edges[i][1]) / 2]
+        else:
+            time_line_pos = [edges[i][0] - (edges[i][0] - edges[i - 1][1]) / 2, edges[i][1],
+                             edges[i][0], edges[i][1], edges[i][1] - edges[i][0] + (edges[i][0] - edges[i - 1][1]) / 2]
+
+        time_line = [pos / srate for pos in time_line_pos]
+        time_line.append(time_line_pos[-1] / total_len)
+        time_lines.append(time_line)
+
+    return time_lines
+
+
+def split_audio(inputs, splitted_timelines):
+    full_audio = inputs["full_audio"]
+    full_audio_len = inputs["full_audio_len"]
+
+    cur_pos = 0
+    for t in splitted_timelines:
+        cur_len = int(full_audio_len * t[-1])
+        audio = full_audio[:, cur_pos:cur_pos + cur_len, :]
+        cur_pos += cur_len
+        yield audio, paddle.to_tensor(cur_len)
+
+
+class SplitASRExecutor(ASRExecutor):
+    def __init__(self):
+        super(SplitASRExecutor, self).__init__()
+
+    def postprocess(self) -> Union[str, os.PathLike]:
+        """
+            Output postprocess and return human-readable results such as texts and audio files.
+        """
+        return self._outputs["result"]
+
+    def __call__(self,
+                 audio_file: os.PathLike,
+                 model: str = 'conformer_wenetspeech',
+                 lang: str = 'zh',
+                 sample_rate: int = 16000,
+                 config: os.PathLike = None,
+                 ckpt_path: os.PathLike = None,
+                 force_yes: bool = False,
+                 device=paddle.get_device(),
+                 verbose=False):
+
+        if verbose:
+            self.disable_task_loggers()
+
+        """
+        Python API to call an executor.
+        """
+        audio_file = os.path.abspath(audio_file)
+        self._check(audio_file, sample_rate, force_yes)
+        paddle.set_device(device)
+        self._init_from_path(model, lang, sample_rate, config, ckpt_path)
+        self.preprocess(model, audio_file)
+
+        self._inputs["full_audio"] = self._inputs["audio"]
+        self._inputs["full_audio_len"] = self._inputs["audio_len"]
+
+        data, edeges = vad_split(audio_file, sample_rate)
+        self.splitted_timelines = get_splitted_timelines(data, edeges, sample_rate)
+        self.audio_data = data
+
+        if verbose:
+            self.disable_task_loggers()
+
+        ret = []
+        if len(self.splitted_timelines) > 1:
+            for audio, audio_len in split_audio(self._inputs, self.splitted_timelines):
+                self._inputs["audio"] = audio
+                self._inputs["audio_len"] = audio_len
+                self.infer(model)
+                ret.append(self._outputs["result"])
+        else:
+            self.infer(model)
+            ret.append(self._outputs["result"])
+
+        return self.splitted_timelines, ret
+
+
+def speech_recognize(filename):
+    global asr_executor
+    if asr_executor is None:
+        asr_executor = MyASRExecutor()
+    asr_file = get_wav(filename, ar=16000)
+    text = asr_executor(
+        model='conformer_wenetspeech',
+        lang='zh',
+        sample_rate=16000,
+        config=None,  # Set config and ckpt_path to None to use pretrained model.
+        ckpt_path=None,
+        audio_file=asr_file,
+        force_yes=False,
+        device=paddle.get_device(),
+        verbose=True)
+    os.remove(asr_file)
+    return text
+
 
 def post_to_recognize(image_file_list):
     url = "http://127.0.0.1:8868/predict/ocr_system"
@@ -356,7 +514,6 @@ class AutoSubtitleExtractor():
             split_spans = get_split_spans(self.splits, self.fps, self.frame_count)
             self.split_spans = split_spans
             self.scenes = [[] for _ in range(len(split_spans))]
-
 
         with open(srt_filename, mode='w', encoding='utf-8') as f:
             for index, content in enumerate(subtitle_content):
@@ -796,7 +953,6 @@ class AutoSubtitleExtractor():
             if len(self.areas) == 0:
                 if len(area_subtitles) > 0:
                     self.areas.append(area_subtitles[0][0])
-
 
             f.seek(0)
             for i in content:
