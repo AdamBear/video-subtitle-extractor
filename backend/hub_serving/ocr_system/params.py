@@ -15,7 +15,7 @@ def read_params():
     #params for text detector
     cfg.det_algorithm = "DB"
     cfg.det_model_dir = config.DET_MODEL_PATH
-    cfg.det_limit_side_len = 960
+    cfg.det_limit_side_len = 480
     cfg.det_limit_type = 'max'
 
     #DB parmas

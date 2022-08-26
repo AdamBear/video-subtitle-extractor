@@ -50,6 +50,7 @@ class OCRSystem(hub.Module):
                 )
         cfg.ir_optim = True
         cfg.enable_mkldnn = enable_mkldnn
+        #cfg.det_max_side_len
 
         self.text_sys = TextSystem(cfg)
 
