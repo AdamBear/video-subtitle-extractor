@@ -30,6 +30,13 @@ import copy
 from paddlenlp import Taskflow
 import paddlehub as hub
 
+import pynvml
+import time
+import os
+
+pynvml.nvmlInit()
+handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+
 """
 use pyvad to split the audio and get the time-stampped ASR result
 see https://github.com/F-Tag/python-vad
@@ -218,17 +225,51 @@ class SplitASRExecutor(ASRExecutor):
         return self.splitted_timelines, ret
 
 
+def kill_pid_ocr():
+    with open("/python/video-subtitle-extractor/backend/pid_ocr.txt", "r") as f:
+        pid_ocr = int(f.read())
+        print(f"kill {pid_ocr}")
+        os.system("kill -9 {}".format(pid_ocr))
+
+
 def post_to_recognize(image_file_list):
+    retry_times = 2
+    wait_time = 60
+
     url = "http://127.0.0.1:8868/predict/ocr_system"
+
+    mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
 
     headers = {"Content-type": "application/json"}
     total_time = 0
-    starttime = time.time()
-    data = {'images': [], 'paths': image_file_list}
-    r = requests.post(url=url, headers=headers, data=json.dumps(data))
-    elapse = time.time() - starttime
-    total_time += elapse
-    return r.json()
+
+    r = None
+    while retry_times > 0:
+        try:
+            starttime = time.time()
+            data = {'images': [], 'paths': image_file_list}
+            r = requests.post(url=url, headers=headers, data=json.dumps(data))
+            elapse = time.time() - starttime
+            total_time += elapse
+            break
+        except:
+            retry_times -= 1
+            while wait_time > 0:
+                time.sleep(1)
+                wait_time -= 1
+            wait_time = 60
+
+    new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+
+    if r:
+        if new_mem_used - mem_used > 6:
+            kill_pid_ocr()
+            while wait_time > 0:
+                time.sleep(1)
+                wait_time -= 1
+        return r.json()
+    else:
+        return {"msg": 'failed', "result": []}
 
 
 def get_hash(url):
@@ -1092,7 +1133,7 @@ class AutoSubtitleExtractor():
                 frame_start = self._frame_to_timecode(frame_no_start)
                 frame_no_end = int(content[1] * self.fps)
                 frame_end = self._frame_to_timecode(frame_no_end)
-                frame_content = content[2]
+                frame_content = content[2].replace("\n", "") + "\n"
                 processed_subtitle.append([frame_start, frame_end, frame_no_start, frame_no_end, frame_content])
                 subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n'
                 f.write(subtitle_line)
