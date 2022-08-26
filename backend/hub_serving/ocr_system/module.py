@@ -16,9 +16,9 @@ import cv2
 import numpy as np
 import paddlehub as hub
 
-from paddleocr.tools.infer.utility import base64_to_cv2
-from paddleocr.tools.infer.predict_system import TextSystem
-from paddleocr.tools.infer.utility import parse_args
+from tools.infer.utility import base64_to_cv2
+from tools.infer.predict_system import TextSystem
+from tools.infer.utility import parse_args
 from hub_serving.ocr_system.params import read_params
 
 
@@ -50,7 +50,6 @@ class OCRSystem(hub.Module):
                 )
         cfg.ir_optim = True
         cfg.enable_mkldnn = enable_mkldnn
-        #cfg.det_max_side_len
 
         self.text_sys = TextSystem(cfg)
 
