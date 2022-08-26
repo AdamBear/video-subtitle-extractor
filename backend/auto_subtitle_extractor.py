@@ -462,7 +462,8 @@ class AutoSubtitleExtractor():
         if len(result) == 0:
             self.export_key_frames = False
             self.detect_scene = False
-            return self.generate_asr_subtitle()
+            result =  self.generate_asr_subtitle()
+
         # 清理临时文件
         # self._delete_frame_cache()
 
