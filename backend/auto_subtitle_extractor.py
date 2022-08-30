@@ -93,7 +93,7 @@ def speech_recognize(file):
         cor_text, errors = text_correction['target'], text_correction['errors']
         print(f'[Text Correction] errors: {errors}')
         punc_text = punc_model.add_puncs(cor_text, device='cpu')[0]
-        punc_ret.append([t[0], t[1], punc_text])
+        punc_ret.append([t[0], t[1], punc_text.replace("、", "")])
 
     return punc_ret
 
