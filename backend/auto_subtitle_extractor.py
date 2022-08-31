@@ -89,15 +89,16 @@ def speech_recognize(file):
 
     punc_ret = []
     for text, t in zip(ret, splitted_timelines):
-        if len(text) > 0:
-            text_correction = text_correct_model(text)[0]
-            cor_text, errors = text_correction['target'], text_correction['errors']
-            print(f'[Text Correction] errors: {errors}')
-            punc_text = punc_model.add_puncs(cor_text, device='cpu')[0]
-        else:
-            punc_text = ""
+        # if len(text) > 0:
+            # text_correction = text_correct_model(text)[0]
+            # cor_text, errors = text_correction['target'], text_correction['errors']
+            # print(f'[Text Correction] errors: {errors}')
+            # punc_text = punc_model.add_puncs(cor_text, device='cpu')[0]
+        # else:
+            # punc_text = ""
 
-        punc_ret.append([t[0], t[1], punc_text.replace("、", "").replace("：", "").replace(":", "")])
+        # punc_ret.append([t[0], t[1], punc_text.replace("、", "").replace("：", "").replace(":", "")])
+        punc_ret.append([t[0], t[1], text + "。"])
 
     return punc_ret
 
