@@ -93,7 +93,7 @@ def speech_recognize(file):
         cor_text, errors = text_correction['target'], text_correction['errors']
         print(f'[Text Correction] errors: {errors}')
         punc_text = punc_model.add_puncs(cor_text, device='cpu')[0]
-        punc_ret.append([t[0], t[1], punc_text.replace("、", "")])
+        punc_ret.append([t[0], t[1], punc_text.replace("、", "").replace("：", "").replace(":", "")])
 
     return punc_ret
 
@@ -1123,6 +1123,9 @@ class AutoSubtitleExtractor():
         print(f"splits:{self.splits}, fps:{self.fps}, frame_count:{self.frame_count}")
 
         save_path = extract_audio(self.video_path)
+        if not save_path:
+            return []
+
         ret = speech_recognize(save_path)
         # [[0.0, 2.86, '对于今年的市场销售，做了一个规划。'], [2.86, 6.7406875, '我个人也是对这次的方案进行了一个全面的策划。']]
 
