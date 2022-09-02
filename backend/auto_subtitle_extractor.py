@@ -99,7 +99,6 @@ def speech_recognize(file):
 
         punc_ret.append([t[0], t[1], punc_text.replace("、", "").replace("：", "").replace(":", "")])
 
-
     return punc_ret
 
 
@@ -267,7 +266,7 @@ def post_to_recognize(image_file_list):
     new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
 
     if r:
-        if new_mem_used - mem_used > 6:
+        if new_mem_used - mem_used > 13:
             kill_pid_ocr()
             while wait_time > 0:
                 time.sleep(1)
@@ -467,7 +466,7 @@ class AutoSubtitleExtractor():
         if len(result) == 0:
             self.export_key_frames = False
             self.detect_scene = False
-            result =  self.generate_asr_subtitle()
+            result = self.generate_asr_subtitle()
 
         # 清理临时文件
         # self._delete_frame_cache()
