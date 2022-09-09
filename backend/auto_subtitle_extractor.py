@@ -242,7 +242,7 @@ def post_to_recognize(image_file_list):
 
     url = "http://127.0.0.1:8868/predict/ocr_system"
 
-    mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+    #mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
 
     headers = {"Content-type": "application/json"}
     total_time = 0
@@ -263,17 +263,18 @@ def post_to_recognize(image_file_list):
                 wait_time -= 1
             wait_time = 60
 
-    new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+    #new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+    return r.json()
 
-    if r:
-        if new_mem_used - mem_used > 13:
-            kill_pid_ocr()
-            while wait_time > 0:
-                time.sleep(1)
-                wait_time -= 1
-        return r.json()
-    else:
-        return {"msg": 'failed', "result": []}
+    # if r:
+    #     if new_mem_used - mem_used > 13:
+    #         kill_pid_ocr()
+    #         while wait_time > 0:
+    #             time.sleep(1)
+    #             wait_time -= 1
+    #     return r.json()
+    # else:
+    #     return {"msg": 'failed', "result": []}
 
 
 def get_hash(url):
@@ -466,6 +467,7 @@ class AutoSubtitleExtractor():
         if len(result) == 0:
             self.export_key_frames = False
             self.detect_scene = False
+            self.export_cut_video = False
             result = self.generate_asr_subtitle()
 
         # 清理临时文件

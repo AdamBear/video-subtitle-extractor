@@ -2,7 +2,7 @@
 """
 @Author  : Fang Yao 
 @Time    : 2021/3/24 9:36 上午
-@FileName: config.py
+@FileName: ua_config.py
 @desc: 项目配置文件，可以在这里调参，牺牲时间换取精确度，或者牺牲准确度换取时间
 """
 import warnings
