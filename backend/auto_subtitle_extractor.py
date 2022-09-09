@@ -464,11 +464,11 @@ class AutoSubtitleExtractor():
 
         # 判断是否开启精准模式
         result = self.generate_subtitle_file()
-        if len(result) == 0:
-            self.export_key_frames = False
-            self.detect_scene = False
-            self.export_cut_video = False
-            result = self.generate_asr_subtitle()
+        # if len(result) == 0:
+        #     self.export_key_frames = False
+        #     self.detect_scene = False
+        #     self.export_cut_video = False
+        #     result = self.generate_asr_subtitle()
 
         # 清理临时文件
         # self._delete_frame_cache()
