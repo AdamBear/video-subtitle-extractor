@@ -560,8 +560,7 @@ class AutoSubtitleExtractor():
                         # 关闭文件
             f.close()
 
-            if self.debug:
-                shutil.copyfile(self.raw_subtitle_path, self.raw_subtitle_path + ".raw.txt")
+            shutil.copyfile(self.raw_subtitle_path, self.raw_subtitle_path + ".raw.txt")
 
     def find_scenes(self, threshold=30.0):
         # Create our video & scene managers, then add the detector.
