@@ -242,7 +242,7 @@ def post_to_recognize(image_file_list):
 
     url = "http://127.0.0.1:8868/predict/ocr_system"
 
-    #mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+    # mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
 
     headers = {"Content-type": "application/json"}
     total_time = 0
@@ -263,7 +263,7 @@ def post_to_recognize(image_file_list):
                 wait_time -= 1
             wait_time = 60
 
-    #new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+    # new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
     return r.json()
 
     # if r:
@@ -596,6 +596,12 @@ class AutoSubtitleExtractor():
             self.filter_scene_text()
 
         subtitle_content = self._remove_duplicate_subtitle()
+
+        if len(subtitle_content) == 0:
+            shutil.copyfile(self.raw_subtitle_path + ".raw.txt", self.raw_subtitle_path)
+            if self.remove_too_common:
+                self._remove_too_common()
+            subtitle_content = self._remove_duplicate_subtitle()
 
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
