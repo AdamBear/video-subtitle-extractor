@@ -255,15 +255,29 @@ def post_to_recognize(image_file_list):
             r = requests.post(url=url, headers=headers, data=json.dumps(data))
             elapse = time.time() - starttime
             total_time += elapse
-            break
         except:
             retry_times -= 1
+            kill_pid_ocr()
             while wait_time > 0:
                 time.sleep(1)
                 wait_time -= 1
             wait_time = 60
-
+        if r:
+            ret = r.json()
+            if "result" in ret:
+                if len(ret["result"]) == 0:
+                    retry_times -= 1
+                    kill_pid_ocr()
+                    while wait_time > 0:
+                        time.sleep(1)
+                        wait_time -= 1
+                    wait_time = 60
+                else:
+                    break
+            else:
+                break
     # new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+
     return r.json()
 
     # if r:
