@@ -478,6 +478,9 @@ class AutoSubtitleExtractor():
 
         # 判断是否开启精准模式
         result = self.generate_subtitle_file()
+        if len(result) == 0:
+            kill_pid_ocr()
+
         # if len(result) == 0:
         #     self.export_key_frames = False
         #     self.detect_scene = False
