@@ -276,9 +276,12 @@ def post_to_recognize(image_file_list):
                     break
             else:
                 break
-    # new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
 
-    return r.json()
+    # new_mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
+    if r:
+        return r.json()
+    else:
+        return {"msg": 'failed', "result": []}
 
     # if r:
     #     if new_mem_used - mem_used > 13:
