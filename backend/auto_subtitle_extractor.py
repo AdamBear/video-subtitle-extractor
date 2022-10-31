@@ -1,3 +1,10 @@
+import sys
+
+image_ai_demos_path = "/data/image_ai_demos/"
+sys.path.insert(-1, image_ai_demos_path)
+
+from image_fill import TestOptions, process_image
+
 import hashlib
 import json
 import os
@@ -34,8 +41,8 @@ import pynvml
 import time
 import os
 
-pynvml.nvmlInit()
-handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+# pynvml.nvmlInit()
+# handle = pynvml.nvmlDeviceGetHandleByIndex(0)
 
 """
 use pyvad to split the audio and get the time-stampped ASR result
@@ -324,6 +331,33 @@ def is_all_english_char(sentence):
     return True
 
 
+def get_rec_area(rec):
+    ymin = min(rec[2], rec[3])
+    ymax = max(rec[3], rec[2])
+    xmin = min(rec[0], rec[1])
+    xmax = max(rec[1], rec[0])
+    return (xmin, ymin, xmax - xmin, ymax - ymin)
+
+
+def add_mask(maskimg, area):
+    for i in range(area[3]):
+        for j in range(area[2]):
+            maskimg[area[1] + i][area[0] + j] = 255
+    return maskimg
+
+
+def get_douyin_rec(rec, w, h):
+    return (max(rec[0] - 70, 0), min(rec[1] + 60, w), max(rec[2] - 18, 0), min(rec[3] + 18, h))
+
+
+def get_douyin_hao_rec(rec, w, h):
+    return (max(rec[0] - 18, 0), min(rec[1] + 30, w), max(rec[2] - 18, 0), min(rec[3] + 18, h))
+
+
+def grow_rec(rec, w, h, pad=10):
+    return (max(rec[0] - 3 * pad, 0), min(rec[1] + 3 * pad, w), max(rec[2] - pad, 0), min(rec[3] + pad, h))
+
+
 def is_float(test_string):
     try:
         float(test_string)
@@ -394,12 +428,34 @@ def export_cover(input_mp4, output_jpeg, debug=False):
         return ""
 
 
+def get_fill_model():
+    import sys
+    import image_models as models
+
+    sys.argv.append("--port")
+    sys.argv.append("8897")
+    sys.argv.append("--image_dir")
+    sys.argv.append("./datasets/places2sample1k_val/places2samples1k_crop256")
+    sys.argv.append("--mask_dir")
+    sys.argv.append("./datasets/places2sample1k_val/places2samples1k_256_mask_square128")
+    sys.argv.append("--output_dir")
+    sys.argv.append("./results")
+    sys.argv.append("--checkpoints_dir")
+    sys.argv.append(os.path.join(image_ai_demos_path, "checkpoints"))
+
+    opt = TestOptions().parse()
+
+    model = models.create_model(opt)
+    model.eval()
+    return model
+
+
 class AutoSubtitleExtractor():
     """
     视频字幕提取类
     """
 
-    def __init__(self, vd_path, export_key_frames):
+    def __init__(self, vd_path, export_key_frames, start_ms=-1, end_ms=-1):
         self.sub_area = None
         self.export_key_frames = export_key_frames
         self.export_cut_video = True
@@ -412,7 +468,8 @@ class AutoSubtitleExtractor():
         self.split_spans = []
         self.scenes = []
         self.asr_only = False
-
+        self.start_ms = start_ms
+        self.end_ms = end_ms
         # 字幕区域位置
         self.subtitle_area = config.SubtitleArea.LOWER_PART
 
@@ -429,10 +486,16 @@ class AutoSubtitleExtractor():
         self.fps = self.video_cap.get(cv2.CAP_PROP_FPS)
         # 视频秒数
         self.video_length = float(self.frame_count / self.fps)
+
         # 视频尺寸
         self.frame_height = int(self.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.h = self.frame_height
         self.frame_width = int(self.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.w = self.frame_width
         self.size = (self.frame_width, self.frame_height)
+
+        self.start_frame = -1
+        self.end_frame = -1
 
         # 提取的视频帧储存目录
         self.frame_output_dir = os.path.join(self.temp_output_dir, 'frames')
@@ -448,8 +511,13 @@ class AutoSubtitleExtractor():
         # 提取的原始字幕文本存储路径
         self.raw_subtitle_path = os.path.join(self.subtitle_output_dir, 'raw.txt')
 
+        self.num_frame = 0
         # 处理进度
         self.progress = 0
+
+        self.ms_per_frame = 1000 / self.fps
+        self.mask_cache = {}
+        self.fill_model = None
 
     def run(self):
 
@@ -513,6 +581,9 @@ class AutoSubtitleExtractor():
         # 当前视频帧的帧号
         frame_no = 0
 
+        self.frame_key_frame = {}
+        self.next_key_frame = {}
+        last_key_frame = -1
         while self.video_cap.isOpened():
             ret, frame = self.video_cap.read()
             # 如果读取视频帧失败（视频读到最后一帧）
@@ -521,6 +592,30 @@ class AutoSubtitleExtractor():
             # 读取视频帧成功
             else:
                 frame_no += 1
+
+                # 处理指定的提取范围
+                if self.start_ms > 0:
+                    if self.ms_per_frame * frame_no < self.start_ms:
+                        continue
+
+                if self.end_ms > 0:
+                    if self.ms_per_frame * frame_no > self.end_ms:
+                        break
+
+                # 读取视频帧成功
+                if self.h < 0:
+                    self.h, self.w = frame.shape[0], frame.shape[1]
+
+                if self.start_frame < 0:
+                    self.start_frame = frame_no
+
+                # 记录当前帧所对应的处理关键帧
+                if last_key_frame > 0:
+                    self.next_key_frame[last_key_frame] = frame_no
+
+                last_key_frame = frame_no
+                self.frame_key_frame[frame_no] = last_key_frame
+                self.num_frame += 1
 
                 filename = os.path.join(self.frame_output_dir, str(frame_no).zfill(8) + '.jpg')
 
@@ -544,6 +639,9 @@ class AutoSubtitleExtractor():
                     ret, _ = self.video_cap.read()
                     if ret:
                         frame_no += 1
+                        self.num_frame += 1
+                        self.frame_key_frame[frame_no] = last_key_frame
+
                         # 更新进度条
                         self.progress = (frame_no / self.frame_count) * 100
 
@@ -621,6 +719,8 @@ class AutoSubtitleExtractor():
             if self.remove_too_common:
                 self._remove_too_common()
             subtitle_content = self._remove_duplicate_subtitle()
+
+        self.coordinates_list, self.frame_contents, self.cord_frame_list = self._get_content_list()
 
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         processed_subtitle = []
@@ -778,7 +878,7 @@ class AutoSubtitleExtractor():
             frame = frame[:cropped]
         return frame
 
-    def _frame_to_timecode(self, frame_no):
+    def _frame_to_timecode(self, frame_no, smpte_token=','):
         """
         将视频帧转换成时间
         :param frame_no: 视频的帧号，i.e. 第几帧视频帧
@@ -801,8 +901,7 @@ class AutoSubtitleExtractor():
         if minutes >= 60:
             hours = int(minutes // 60)
             minutes = int(minutes % 60)
-        smpte_token = ','
-        # cap.release()
+            # cap.release()
         return "%02d:%02d:%02d%s%02d" % (hours, minutes, seconds, smpte_token, milliseconds)
 
     def _remove_duplicate_subtitle(self):
@@ -866,6 +965,39 @@ class AutoSubtitleExtractor():
                     continue
         return unique_subtitle_list
 
+    def _get_content_list(self):
+        f = open(self.raw_subtitle_path, mode='r', encoding='utf-8')  # 打开txt文件，以‘utf-8’编码读取
+        line = f.readline()  # 以行的形式进行读取文件
+        # 坐标点列表
+        coordinates_list = []
+        frame_contents = {}
+        cord_frame_list = []
+
+        last_frame_no = -1
+        while line:
+            frame_no = int(line.split('\t')[0])
+            text_position = line.split('\t')[1].split('(')[1].split(')')[0].split(', ')
+            content = line.split('\t')[2]
+
+            cord = (int(text_position[0]),
+                    int(text_position[1]),
+                    int(text_position[2]),
+                    int(text_position[3]))
+
+            cord_index = len(coordinates_list)
+            coordinates_list.append(cord)
+
+            if frame_no != last_frame_no:
+                frame_contents[frame_no] = []
+                last_frame_no = frame_no
+
+            frame_contents[frame_no].append([cord, content, cord_index, None])
+            cord_frame_list.append(frame_no)
+
+            line = f.readline()
+        f.close()
+        return coordinates_list, frame_contents, cord_frame_list
+
     def _remove_too_common(self):
         """
         将raw txt文本中具有相同帧号的字幕行合并
@@ -892,7 +1024,7 @@ class AutoSubtitleExtractor():
         self.too_commons = set()
         self.counter = Counter(contents).most_common()
         for c in self.counter:
-            if c[1] > max_common_count and len(c[0]) < 12:
+            if c[1] > max_common_count and len(c[0]) < 20:
                 self.too_commons.add(c[0])
             else:
                 break
@@ -1012,8 +1144,17 @@ class AutoSubtitleExtractor():
                 for frame_no, coordinate, content in zip(frame_no_list, coordinates_list, content_list):
                     f.write(f'{frame_no}\t{coordinate}\t{content}')
 
-            if len(Counter(coordinates_list).most_common()) > config.WATERMARK_AREA_NUM:
+            counter = Counter(coordinates_list).most_common()
+            self.most_areas = counter
+            self.watermark_areas = set()
+
+            if len(counter) > config.WATERMARK_AREA_NUM:
                 # 读取配置文件，返回可能为水印区域的坐标列表
+                for c in counter:
+                    if c[1] >= 9:
+                        self.watermark_areas.add(c[0])
+                    else:
+                        break
                 return Counter(coordinates_list).most_common(config.WATERMARK_AREA_NUM)
             else:
                 # 不够则有几个返回几个
@@ -1143,6 +1284,142 @@ class AutoSubtitleExtractor():
         if len(os.listdir(self.frame_output_dir)) > 0:
             for i in os.listdir(self.frame_output_dir):
                 os.remove(os.path.join(self.frame_output_dir, i))
+
+    def _make_content_mask(self, maskimg, content, w, h, remove_text=True, remove_watermark=True, more_grow=True):
+        pad = 20 if more_grow else 10
+        # print(pad)
+        for item in content:
+            if remove_watermark:
+                if "抖音\n" == item[1]:
+                    maskimg = add_mask(maskimg, get_rec_area(get_douyin_rec(item[0], w, h)))
+                if "抖音号：" == item[1][:4]:
+                    maskimg = add_mask(maskimg, get_rec_area(get_douyin_hao_rec(item[0], w, h)))
+                # if item[3] in self.watermark_areas:
+                #    maskimg = add_mask(maskimg, get_rec_area(grow_rec(item[0], w, h, pad)))
+
+            if remove_text:
+                if len(self.areas) > 0:
+                    for (ymin, ymax) in self.areas:
+                        if item[0][2] > ymin and item[0][3] < ymax:
+                            maskimg = add_mask(maskimg, get_rec_area(grow_rec(item[0], w, h, pad)))
+
+        return maskimg
+
+    # 获取可能水印台标遮罩
+    def _get_frame_mask(self, frame_no, remove_text=True, remove_watermark=True):
+        frame_contents = self.frame_contents
+        w = self.w
+        h = self.h
+
+        pre_k = self.frame_key_frame[frame_no]
+        if pre_k in self.next_key_frame:
+            found_k = self.next_key_frame[pre_k]
+        else:
+            found_k = pre_k
+
+        if pre_k in self.mask_cache:
+            return self.mask_cache[pre_k]
+
+        a_maskimg = np.zeros((h, w), dtype=np.uint8)
+
+        # 两张全部加入到mask中
+        if pre_k in frame_contents:
+            pre_content = frame_contents[pre_k]
+            a_maskimg = self._make_content_mask(a_maskimg, pre_content, w, h, remove_text, remove_watermark)
+
+        if found_k in frame_contents:
+            next_content = frame_contents[found_k]
+            a_maskimg = self._make_content_mask(a_maskimg, next_content, w, h, remove_text, remove_watermark)
+
+        self.mask_cache[pre_k] = a_maskimg
+
+        return a_maskimg
+
+    def remove_text_watermark(self, output_file=None, rect=None, remove_text=True, remove_watermark=True, tqdm=None,
+                              st_progress_bar=None):
+        if not self.fill_model:
+            self.fill_model = get_fill_model()
+            if not self.fill_model:
+                print("model not initialized!")
+                return ""
+
+        if not output_file:
+            name = "fixed"
+            if remove_text:
+                name += "_detexted"
+            if remove_watermark:
+                name += "_dewatermark"
+            name += ".mp4"
+            output_file = os.path.join(self.temp_output_dir, name)
+
+        output_file = ".".join(output_file.split(".")[:-1]) + "_wa.mp4"
+
+        writer = cv2.VideoWriter(output_file, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (self.w, self.h))
+
+        video_cap = cv2.VideoCapture(self.video_path)
+        frame_no = 0
+
+        t = None
+        if tqdm:
+            if st_progress_bar:
+                t = tqdm(range(int(self.num_frame)), st_progress_bar=st_progress_bar)
+            else:
+                t = tqdm(range(int(self.num_frame)))
+
+        if rect:
+            a_maskimg = np.zeros((frame_height, frame_width), dtype=np.uint8)
+            add_mask(a_maskimg, rect)
+            a_mask = Image.fromarray(np.array(a_maskimg))
+
+        while video_cap.isOpened():
+            ret, frame = video_cap.read()
+            if not ret:
+                break
+            else:
+                frame_no += 1
+
+                # 处理指定的提取范围
+                if self.start_ms > 0:
+                    if self.ms_per_frame * frame_no < self.start_ms:
+                        continue
+
+                if self.end_ms > 0:
+                    if self.ms_per_frame * frame_no > self.end_ms:
+                        break
+
+                if not rect:
+                    masking = self._get_frame_mask(frame_no, remove_text, remove_watermark)
+                    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(img)
+
+                    a_mask = Image.fromarray(np.array(masking))
+
+                # todo: 此处不要再转两次，直接提供cv版的fill接口
+                img = process_image(self.fill_model, img, a_mask)
+
+                #                 filename = os.path.join("e:/Temp_Output/test_filled", str(frame_no).zfill(8) + '.png')
+                #                 img.save(filename)
+
+                writer.write(cv2.cvtColor(np.array(img).astype(np.uint8), cv2.COLOR_BGR2RGB))
+                if t:
+                    t.update()
+
+        writer.release()
+
+        start_frame = 1
+        end_frame = frame_no
+
+        start_time = self._frame_to_timecode(start_frame - 1, smpte_token=".")
+        end_time = self._frame_to_timecode(end_frame - 1, smpte_token=".")
+        sourceVideo = self.video_path
+        tempAudioFileName = os.path.join(self.temp_output_dir, "temp.aac")
+        mp4_file = output_file
+        output_file = mp4_file[:-len("_wa.mp4")] + ".mp4"
+
+        os.system(f'ffmpeg -y -ss {start_time} -to {end_time} -i "{sourceVideo}" -c:a copy -vn {tempAudioFileName}')
+        os.system(f'ffmpeg -y -i "{mp4_file}" -i {tempAudioFileName} -c copy "{output_file}"')
+
+        return output_file
 
     def generate_asr_subtitle(self):
         """
