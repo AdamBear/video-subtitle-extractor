@@ -549,8 +549,9 @@ class AutoSubtitleExtractor():
 
         # 判断是否开启精准模式
         result = self.generate_subtitle_file()
-        if len(result) == 0:
-            kill_pid_ocr()
+
+        # if len(result) == 0:
+        #     kill_pid_ocr()
 
         # if len(result) == 0:
         #     self.export_key_frames = False
@@ -1367,7 +1368,7 @@ class AutoSubtitleExtractor():
                 t = tqdm(range(int(self.num_frame)))
 
         if rect:
-            a_maskimg = np.zeros((frame_height, frame_width), dtype=np.uint8)
+            a_maskimg = np.zeros((self.frame_height, self.frame_width), dtype=np.uint8)
             add_mask(a_maskimg, rect)
             a_mask = Image.fromarray(np.array(a_maskimg))
 
