@@ -1388,11 +1388,11 @@ class AutoSubtitleExtractor():
                     if self.ms_per_frame * frame_no > self.end_ms:
                         break
 
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(img)
+
                 if not rect:
                     masking = self._get_frame_mask(frame_no, remove_text, remove_watermark)
-                    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    img = Image.fromarray(img)
-
                     a_mask = Image.fromarray(np.array(masking))
 
                 # todo: 此处不要再转两次，直接提供cv版的fill接口
