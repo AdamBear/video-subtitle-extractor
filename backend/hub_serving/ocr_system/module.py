@@ -43,7 +43,7 @@ class OCRSystem(hub.Module):
                 int(_places[0])
                 print("use gpu: ", use_gpu)
                 print("CUDA_VISIBLE_DEVICES: ", _places)
-                cfg.gpu_mem = 8000
+                cfg.gpu_mem = 6000
             except:
                 raise RuntimeError(
                     "Environment Variable CUDA_VISIBLE_DEVICES is not set correctly. If you wanna use gpu, please set CUDA_VISIBLE_DEVICES via export CUDA_VISIBLE_DEVICES=cuda_device_id."

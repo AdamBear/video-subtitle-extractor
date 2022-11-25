@@ -271,8 +271,8 @@ def post_to_recognize(image_file_list):
             wait_time = 60
         if r:
             ret = r.json()
-            if "result" in ret:
-                if len(ret["result"]) == 0:
+            if "results" in ret:
+                if len(ret["results"]) == 0:
                     retry_times -= 1
                     kill_pid_ocr()
                     while wait_time > 0:
@@ -1286,7 +1286,8 @@ class AutoSubtitleExtractor():
             for i in os.listdir(self.frame_output_dir):
                 os.remove(os.path.join(self.frame_output_dir, i))
 
-    def _make_content_mask(self, maskimg, content, w, h, remove_text=True, remove_watermark=True, more_grow=True):
+    def _make_content_mask(self, maskimg, content, w, h, remove_text=True, remove_watermark=True, more_grow=True,
+                           max_rect=None):
         pad = 20 if more_grow else 10
         # print(pad)
         for item in content:
@@ -1302,12 +1303,23 @@ class AutoSubtitleExtractor():
                 if len(self.areas) > 0:
                     for (ymin, ymax) in self.areas:
                         if item[0][2] > ymin and item[0][3] < ymax:
-                            maskimg = add_mask(maskimg, get_rec_area(grow_rec(item[0], w, h, pad)))
+                            rect_area = get_rec_area(grow_rec(item[0], w, h, pad))
+                            maskimg = add_mask(maskimg, rect_area)
+
+                            if max_rect:
+                                if max_rect[0] > rect_area[0]:
+                                    max_rect[0] = rect_area[0]
+                                if max_rect[1] > rect_area[1]:
+                                    max_rect[1] = rect_area[1]
+                                if max_rect[2] < rect_area[2]:
+                                    max_rect[2] = rect_area[2]
+                                if max_rect[3] < rect_area[3]:
+                                    max_rect[3] = rect_area[3]
 
         return maskimg
 
     # 获取可能水印台标遮罩
-    def _get_frame_mask(self, frame_no, remove_text=True, remove_watermark=True):
+    def _get_frame_mask(self, frame_no, remove_text=True, remove_watermark=True, max_rect=None):
         frame_contents = self.frame_contents
         w = self.w
         h = self.h
@@ -1326,11 +1338,13 @@ class AutoSubtitleExtractor():
         # 两张全部加入到mask中
         if pre_k in frame_contents:
             pre_content = frame_contents[pre_k]
-            a_maskimg = self._make_content_mask(a_maskimg, pre_content, w, h, remove_text, remove_watermark)
+            a_maskimg = self._make_content_mask(a_maskimg, pre_content, w, h, remove_text, remove_watermark,
+                                                more_grow=True, max_rect=max_rect)
 
         if found_k in frame_contents:
             next_content = frame_contents[found_k]
-            a_maskimg = self._make_content_mask(a_maskimg, next_content, w, h, remove_text, remove_watermark)
+            a_maskimg = self._make_content_mask(a_maskimg, next_content, w, h, remove_text, remove_watermark,
+                                                more_grow=True, max_rect=max_rect)
 
         self.mask_cache[pre_k] = a_maskimg
 
@@ -1371,6 +1385,9 @@ class AutoSubtitleExtractor():
             a_maskimg = np.zeros((self.frame_height, self.frame_width), dtype=np.uint8)
             add_mask(a_maskimg, rect)
             a_mask = Image.fromarray(np.array(a_maskimg))
+            max_rect = None
+        else:
+            max_rect = [self.w, self.h, 0, 0]
 
         while video_cap.isOpened():
             ret, frame = video_cap.read()
@@ -1392,7 +1409,7 @@ class AutoSubtitleExtractor():
                 img = Image.fromarray(img)
 
                 if not rect:
-                    masking = self._get_frame_mask(frame_no, remove_text, remove_watermark)
+                    masking = self._get_frame_mask(frame_no, remove_text, remove_watermark, max_rect)
                     a_mask = Image.fromarray(np.array(masking))
 
                 # todo: 此处不要再转两次，直接提供cv版的fill接口
@@ -1420,7 +1437,7 @@ class AutoSubtitleExtractor():
         os.system(f'ffmpeg -y -ss {start_time} -to {end_time} -i "{sourceVideo}" -c:a copy -vn {tempAudioFileName}')
         os.system(f'ffmpeg -y -i "{mp4_file}" -i {tempAudioFileName} -c copy "{output_file}"')
 
-        return output_file
+        return output_file, max_rect
 
     def generate_asr_subtitle(self):
         """
