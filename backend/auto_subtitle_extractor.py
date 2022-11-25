@@ -273,6 +273,9 @@ def post_to_recognize(image_file_list):
             ret = r.json()
             if "results" in ret:
                 if len(ret["results"]) == 0:
+                    if "msg" in ret:
+                        print(ret["msg"])
+
                     retry_times -= 1
                     kill_pid_ocr()
                     while wait_time > 0:
