@@ -44,6 +44,7 @@ class OCRSystem(hub.Module):
                 print("use gpu: ", use_gpu)
                 print("CUDA_VISIBLE_DEVICES: ", _places)
                 os.environ['FLAGS_eager_delete_tensor_gb'] = "0.0"
+                os.environ['FLAGS_fraction_of_gpu_memory_to_use'] = "0.8"
                 cfg.gpu_mem = 6000
             except:
                 raise RuntimeError(
