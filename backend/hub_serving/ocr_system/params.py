@@ -15,8 +15,10 @@ def read_params():
     #params for text detector
     cfg.det_algorithm = "DB"
     cfg.det_model_dir = config.DET_MODEL_PATH
-    cfg.det_limit_side_len = 480
+    cfg.det_limit_side_len = 320
     cfg.det_limit_type = 'max'
+    cfg.max_batch_size = 5
+    cfg.rec_batch_num = 3
 
     #DB parmas
     cfg.det_db_thresh = 0.3
