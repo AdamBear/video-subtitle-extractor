@@ -52,7 +52,7 @@ class OCRSystem(hub.Module):
                 )
         cfg.ir_optim = True
         cfg.enable_mkldnn = enable_mkldnn
-
+        cfg.use_fp16 = True
         self.text_sys = TextSystem(cfg)
 
     def merge_configs(self, ):
