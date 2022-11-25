@@ -11,6 +11,6 @@
     },
     "port": 8868,
     "use_multiprocess": false,
-    "workers": 2
+    "workers": 1
 }
 
