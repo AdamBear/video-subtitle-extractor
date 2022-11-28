@@ -247,7 +247,7 @@ def post_to_recognize(image_file_list):
     retry_times = 2
     wait_time = 60
 
-    url = "http://127.0.0.1:8868/predict/chinese_ocr_db_crnn_mobile"
+    url = "http://127.0.0.1:8868/predict/chinese_ocr_db_crnn_server"
 
     # mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
 
@@ -262,7 +262,8 @@ def post_to_recognize(image_file_list):
             r = requests.post(url=url, headers=headers, data=json.dumps(data))
             elapse = time.time() - starttime
             total_time += elapse
-        except:
+        except Exception as e:
+            print(e)
             retry_times -= 1
             kill_pid_ocr()
             while wait_time > 0:
