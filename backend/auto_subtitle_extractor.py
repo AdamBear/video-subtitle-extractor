@@ -524,6 +524,7 @@ class AutoSubtitleExtractor():
         self.ms_per_frame = 1000 / self.fps
         self.mask_cache = {}
         self.fill_model = None
+        self.rec_result = None
 
     def run(self):
 
@@ -671,8 +672,20 @@ class AutoSubtitleExtractor():
 
             rec_result = post_to_recognize(image_file_list)
 
+            self.rec_result = rec_result
+
             for i, (frame, rec_ret) in enumerate(zip(frame_list, rec_result["results"])):
-                dt_box = [r["text_region"] for r in rec_ret]
+                if "data" in rec_ret:
+                    rec_ret = rec_ret["data"]
+
+                if "text_region" in rec_ret[0]:
+                    dt_box = [r["text_region"] for r in rec_ret]
+                elif "text_box_position" in rec_ret[0]:
+                    dt_box = [r["text_box_position"] for r in rec_ret]
+                else:
+                    print(i, rec_ret)
+                    print("no text region detected!")
+
                 rec_res = [(r["text"], r["confidence"]) for r in rec_ret]
                 coordinates = self._get_coordinates(dt_box)
 
@@ -1313,9 +1326,9 @@ class AutoSubtitleExtractor():
                             maskimg = add_mask(maskimg, rect_area)
 
                             if max_rect:
-                                if max_rect[0] > rect_area[0]:
+                                if max_rect[0] > rect_area[0] and rect_area[0] > 0:
                                     max_rect[0] = rect_area[0]
-                                if max_rect[1] > rect_area[1]:
+                                if max_rect[1] > rect_area[1] and rect_area[1] > 0:
                                     max_rect[1] = rect_area[1]
                                 if max_rect[2] < rect_area[2]:
                                     max_rect[2] = rect_area[2]
