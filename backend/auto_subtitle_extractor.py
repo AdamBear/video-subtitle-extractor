@@ -247,7 +247,7 @@ def post_to_recognize(image_file_list):
     retry_times = 2
     wait_time = 60
 
-    url = "http://127.0.0.1:8866/predict/ch_pp-ocrv3_det"
+    url = "http://127.0.0.1:8866/predict/ch_pp-ocrv3"
 
     # mem_used = pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 3)
 
@@ -286,6 +286,7 @@ def post_to_recognize(image_file_list):
                 else:
                     if "msg" in ret:
                         print(ret["msg"])
+                        break
             else:
                 break
 
