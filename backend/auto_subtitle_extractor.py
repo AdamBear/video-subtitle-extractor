@@ -1,15 +1,27 @@
 import sys
 
-image_ai_demos_path = "/data/image_ai_demos/"
-sys.path.insert(-1, image_ai_demos_path)
+from dotenv import load_dotenv
+import os
 
-from image_fill import TestOptions, process_image
+load_dotenv()
+not_local_test = os.getenv('LOCAL_TEST') == "false"
+is_autodl = os.getenv('AUTO-DL') == "true"
 
+if is_autodl:
+    image_ai_demos_path = "/data/image_ai_demos/"
+    sys.path.insert(-1, image_ai_demos_path)
+else:
+    if not not_local_test:
+        image_ai_demos_path = "D:/apps/nlp/prompt/image_ai_demos"
+        sys.path.insert(-1, image_ai_demos_path)
+
+#os.environ['AUTO-DL'] = "true"
+
+import paddle
 import hashlib
 import json
 import os
 import shutil
-import time
 from collections import Counter
 import string
 import config
@@ -23,23 +35,223 @@ from scenedetect.detectors import ContentDetector
 # Standard PySceneDetect imports:
 from scenedetect import VideoManager
 from scenedetect import SceneManager
-from PIL import Image
+from PIL import Image, ImageChops
 
 import librosa
-import numpy as np
-import paddle
 
 from paddlespeech.cli.asr import ASRExecutor
-from paddlespeech.s2t.utils.utility import UpdateConfig
 
 from pyvad import split
 import copy
 from paddlenlp import Taskflow
 import paddlehub as hub
 
-import pynvml
 import time
-import os
+import numpy as np
+from split_wav import extract_and_split
+
+import azure.cognitiveservices.speech as speechsdk
+
+from moviepy import editor
+from moviepy.config import change_settings
+
+if is_autodl:
+    change_settings({"IMAGEMAGICK_BINARY": r"/usr/bin/convert"})
+else:
+    change_settings({"IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.0-Q16-HDRI\magick.exe"})
+
+from api_keys import subscription_key, endpoint, service_region, speech_key
+
+from image_fill import TestOptions, process_image
+
+fill_model = None
+
+
+# to multiple excute at once, encapulate to API
+def to_english(q):
+    import os, requests, uuid, json
+
+    path = '/translate'
+    params = {
+        'api-version': '3.0',
+        'from': 'zh',
+        'to': ['en']
+    }
+    constructed_url = endpoint + path
+
+    headers = {
+        'Ocp-Apim-Subscription-Key': subscription_key,
+        'Ocp-Apim-Subscription-Region': 'global',
+        'Content-type': 'application/json',
+        'X-ClientTraceId': str(uuid.uuid4())
+    }
+
+    # You can pass more than one object in body.
+    is_str = True
+    if isinstance(q, str):
+        body = [{
+            'text': q
+        }]
+    else:
+        is_str = False
+        body = [{
+            'text': t
+        } for t in q]
+
+    request = requests.post(constructed_url, params=params, headers=headers, json=body)
+    response = request.json()
+
+    json.dumps(response, sort_keys=True, indent=4, separators=(',', ': '))
+    if is_str:
+        return response[0]["translations"][0]["text"]
+    else:
+        return [r["translations"][0]["text"] for r in response]
+
+
+def get_english_dubbed(input_video, ocr_result, fps, voice_name="en-US-AriaNeural", no_voice=False):
+    base_name = ".".join(input_video.split(".")[:-1])
+    segs = merge_ocr_subtitles(ocr_result, fps)
+    englishs = to_english([t["text"] for t in segs])
+    for s, e in zip(segs, englishs):
+        s["english"] = e
+
+    if voice_name:
+        for i, s in enumerate(segs):
+            tts_file = base_name + "_" + str(i) + "_eng_tts.wav"
+            say_english(s["english"], tts_file, voice_name=voice_name)
+            s["eng_tts_file"] = tts_file
+
+    # fix the end tag to next start tag
+    for i in range(len(segs)):
+        if i < len(segs) - 1:
+            segs[i]["end"] = segs[i + 1]["start"]
+
+    return segs
+
+
+def say_english(text, output_file, voice_name="en-US-AriaNeural", service_region="eastasia"):
+    speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=service_region)
+
+    # Set the voice name, refer to https://aka.ms/speech/voices/neural for full list.
+    # speech_config.speech_synthesis_voice_name = "en-US-AriaNeural"
+    speech_config.speech_synthesis_voice_name = voice_name
+    speech_synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
+
+    result = speech_synthesizer.speak_text_async(text).get()
+
+    # Checks result.
+    if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+        print("Speech synthesized to speaker for text [{}]".format(text))
+        stream = speechsdk.AudioDataStream(result)
+        stream.save_to_wav_file(output_file)
+        return True
+
+    elif result.reason == speechsdk.ResultReason.Canceled:
+        cancellation_details = result.cancellation_details
+        print("Speech synthesis canceled: {}".format(cancellation_details.reason))
+        if cancellation_details.reason == speechsdk.CancellationReason.Error:
+            if cancellation_details.error_details:
+                print("Error details: {}".format(cancellation_details.error_details))
+        print("Did you update the subscription info?")
+    return False
+
+
+# 直接通过ocr_subtitle进行合理的合并，单段的秒数设置最大长度，停顿间隔可以计算出来
+def merge_ocr_subtitles(ocr_subtitle, fps):
+    segments = []
+    for s in ocr_subtitle:
+        start = s[2] / fps
+        end = s[3] / fps
+        text = s[4]
+        segments.append({"start": start, "end": end, "text": text})
+
+    results = []
+    i = 0
+    while i < len(segments):
+        s = segments[i]
+        for j in range(i + 1, len(segments)):
+            if segments[j]['start'] < s['end'] + 0.4:
+                s['end'] = segments[j]['end']
+                s['text'] += "," + segments[j]['text']
+                i = j
+
+                # 重新计算长度，超过5秒后就截断，防止音画过于不同步
+                length = s["end"] - s["start"]
+                if length > 5:
+                    break
+            else:
+                break
+        i += 1
+        results.append({"start": s["start"], "end": s["end"], "text": s["text"], "len": s["end"] - s["start"]})
+
+    return results
+
+
+def gen_subtitled_video(input_video, segs, rect=None, color="white", fontsize=32, font="Keep-Calm-Medium-bold",
+                        no_voice=False):
+
+    base_name = ".".join(input_video.split(".")[:-1])
+
+    if not no_voice:
+        ret = extract_and_split(input_video, job_id=None, separate=True, hop=0)
+        bgm = editor.AudioFileClip(ret["bgm"])
+    else:
+        bgm = None
+
+    video = editor.VideoFileClip(input_video)
+    clips = [video.subclip(0, segs[0]['start'])]
+
+    for s in segs:
+        if s["start"] > video.duration:
+            break
+        if s["end"] > video.duration:
+            s["end"] = video.duration
+
+        video_s = video.subclip(s['start'], s['end'])
+
+        if not no_voice:
+            audio = editor.AudioFileClip(s["eng_tts_file"])
+            print("eng_tts_file", s["eng_tts_file"])
+            print(video_s.duration, audio.duration)
+
+            # change the video speed to fit the audio duration
+            video_s = video_s.without_audio().fx(editor.vfx.speedx, video_s.duration / audio.duration)
+            print("adaptered", video_s.duration, audio.duration)
+
+            video_s = video_s.without_audio().set_audio(audio).set_duration(audio.duration)
+            del s["eng_tts_file"]
+
+        # 字体颜色改为"白色"， 大小可以再细调，自动字幕的位置和宽度如何定
+        # 原始的背景音乐还配得上吗？ 因为视频已经拉长了。
+        # font=font,
+        text_clip = editor.TextClip(txt=s["english"], color=color, fontsize=fontsize, stroke_width=2,
+                                    kerning=-2, interline=-1, size=(rect[2], None), method='caption').set_duration(
+            video_s.duration).set_position([rect[0], rect[1]])
+        video_s = editor.CompositeVideoClip([video_s, text_clip])
+
+        clips.append(video_s)
+
+    final_clip = editor.concatenate_videoclips(clips, method="compose")
+
+    if not no_voice:
+        video_audio_clip = final_clip.audio.volumex(2)
+
+        # 设置背景音乐循环，时间与视频时间一致
+        bgm_audio_clip = bgm.audio_loop(duration=final_clip.duration).volumex(0.8)
+
+        # 视频声音和背景音乐，音频叠加
+        audio_clip_add = editor.CompositeAudioClip([video_audio_clip, bgm_audio_clip])
+
+        # 视频写入背景音
+        final_video = final_clip.without_audio().set_audio(audio_clip_add)
+    else:
+        final_video = final_clip
+
+    video_file = base_name + "_english.mp4"
+    final_video.write_videofile(video_file, audio_codec='aac')
+
+    return video_file
+
 
 # pynvml.nvmlInit()
 # handle = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -361,7 +573,7 @@ def get_douyin_hao_rec(rec, w, h):
 
 
 def grow_rec(rec, w, h, pad=10):
-    return (max(rec[0] - 3 * pad, 0), min(rec[1] + 3 * pad, w), max(rec[2] - pad, 0), min(rec[3] + pad, h))
+    return (max(rec[0] - 3 * pad, 0), min(rec[1] + 3 * pad, w), max(rec[2] - 2*pad, 0), min(rec[3] + 2*pad, h))
 
 
 def is_float(test_string):
@@ -434,7 +646,22 @@ def export_cover(input_mp4, output_jpeg, debug=False):
         return ""
 
 
+def fix_video_fps_to_25(input1_mp4, output_file, debug=False):
+    cmd = f"ffmpeg -y -i {input1_mp4} -r 25 {output_file}"
+    r = os.system(cmd)
+    if debug:
+        print(cmd)
+    if r == 0:
+        return output_file
+    else:
+        return ""
+
+
 def get_fill_model():
+    global fill_model
+    if fill_model:
+        return fill_model
+
     import sys
     import image_models as models
 
@@ -453,6 +680,7 @@ def get_fill_model():
 
     model = models.create_model(opt)
     model.eval()
+    fill_model = model
     return model
 
 
@@ -525,6 +753,11 @@ class AutoSubtitleExtractor():
         self.mask_cache = {}
         self.fill_model = None
         self.rec_result = None
+        self.skip_watermark = True
+        self.ocr_result = None
+        self.refilled_video = None
+        self.max_rect = None
+        self.segments = None
 
     def run(self):
 
@@ -575,7 +808,7 @@ class AutoSubtitleExtractor():
 
         print(interface_config['Main']['FinishGenerateSub'])
         self.progress = 100
-
+        self.ocr_result = result
         return result
 
     # todo: 继续优化，为了兼容去台标处理，可以考虑不切分，而使用全OCR识别，字幕区域可以使用算法去除
@@ -677,6 +910,9 @@ class AutoSubtitleExtractor():
             for i, (frame, rec_ret) in enumerate(zip(frame_list, rec_result["results"])):
                 if "data" in rec_ret:
                     rec_ret = rec_ret["data"]
+
+                if len(rec_ret) == 0:
+                    continue
 
                 if "text_region" in rec_ret[0]:
                     dt_box = [r["text_region"] for r in rec_ret]
@@ -1018,6 +1254,9 @@ class AutoSubtitleExtractor():
         f.close()
         return coordinates_list, frame_contents, cord_frame_list
 
+    def _is_possible_watermark(self, text):
+        return "抖音" in text
+
     def _remove_too_common(self):
         """
         将raw txt文本中具有相同帧号的字幕行合并
@@ -1033,8 +1272,7 @@ class AutoSubtitleExtractor():
             frame_no = line.split('\t')[0]
             coordinate = line.split('\t')[1]
             content = line.split('\t')[2]
-            if content.strip().startswith("抖音号:"):
-                continue
+
             frame_no_list.append(frame_no)
             contents.append(content)
             content_list.append([frame_no, coordinate, content])
@@ -1044,7 +1282,10 @@ class AutoSubtitleExtractor():
         self.too_commons = set()
         self.counter = Counter(contents).most_common()
         for c in self.counter:
-            if c[1] > max_common_count and len(c[0]) < 20:
+            if c[1] > max_common_count and len(c[0]) < 12:
+                if not self.skip_watermark:
+                    if self._is_possible_watermark(c[0]):
+                        continue
                 self.too_commons.add(c[0])
             else:
                 break
@@ -1199,6 +1440,8 @@ class AutoSubtitleExtractor():
             return Counter(y_coordinates_list).most_common(5)
 
     def filter_scene_text(self):
+        # todo: 需要可选的保留抖音的水印
+
         # 检查水印区域，并处理区域合并
         # 此处需要重构，最多的一个未尝是正确的
         self._detect_watermark_area()
@@ -1241,6 +1484,11 @@ class AutoSubtitleExtractor():
             for i in content:
                 i_ymin = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[2])
                 i_ymax = int(i.split('\t')[1].split('(')[1].split(')')[0].split(', ')[3])
+                if not self.skip_watermark:
+                    if self._is_possible_watermark(i):
+                        f.write(i)
+                        continue
+
                 if len(self.areas) > 0:
                     for (ymin, ymax) in self.areas:
                         if ymin <= i_ymin and i_ymax <= ymax:
@@ -1307,7 +1555,7 @@ class AutoSubtitleExtractor():
 
     def _make_content_mask(self, maskimg, content, w, h, remove_text=True, remove_watermark=True, more_grow=True,
                            max_rect=None):
-        pad = 20 if more_grow else 10
+        pad = 35 if more_grow else 10
         # print(pad)
         for item in content:
             if remove_watermark:
@@ -1369,22 +1617,30 @@ class AutoSubtitleExtractor():
 
         return a_maskimg
 
+    def process_rect_fill(self, img, a_mask, rect_fill_color="black"):
+        if rect_fill_color == "black":
+            invert_a_mask = ImageChops.invert(a_mask)
+        else:
+            invert_a_mask = a_mask
+        img.paste(invert_a_mask, (0, 0), mask=a_mask)
+        return img
+
     def remove_text_watermark(self, output_file=None, rect=None, remove_text=True, remove_watermark=True, tqdm=None,
-                              st_progress_bar=None):
-        if not self.fill_model:
+                              st_progress_bar=None, rect_fill_color=None):
+        if not self.fill_model and not rect_fill_color:
             self.fill_model = get_fill_model()
             if not self.fill_model:
                 print("model not initialized!")
                 return ""
 
         if not output_file:
-            name = "fixed"
-            if remove_text:
-                name += "_detexted"
-            if remove_watermark:
-                name += "_dewatermark"
-            name += ".mp4"
-            output_file = os.path.join(self.temp_output_dir, name)
+            # name = "fixed"
+            # if remove_text:
+            #     name += "_detexted"
+            # if remove_watermark:
+            #     name += "_dewatermark"
+            # name += ".mp4"
+            output_file = os.path.join(self.temp_output_dir, "fixed_detexted_dewatermark.mp4")
 
         output_file = ".".join(output_file.split(".")[:-1]) + "_wa.mp4"
 
@@ -1431,13 +1687,13 @@ class AutoSubtitleExtractor():
                     masking = self._get_frame_mask(frame_no, remove_text, remove_watermark, max_rect)
                     a_mask = Image.fromarray(np.array(masking))
 
-                # todo: 此处不要再转两次，直接提供cv版的fill接口
-                img = process_image(self.fill_model, img, a_mask)
-
-                #                 filename = os.path.join("e:/Temp_Output/test_filled", str(frame_no).zfill(8) + '.png')
-                #                 img.save(filename)
+                if not rect_fill_color:
+                    img = process_image(self.fill_model, img, a_mask)
+                else:
+                    img = self.process_rect_fill(img, a_mask, rect_fill_color)
 
                 writer.write(cv2.cvtColor(np.array(img).astype(np.uint8), cv2.COLOR_BGR2RGB))
+
                 if t:
                     t.update()
 
@@ -1457,6 +1713,41 @@ class AutoSubtitleExtractor():
         os.system(f'ffmpeg -y -i "{mp4_file}" -i {tempAudioFileName} -c copy "{output_file}"')
 
         return output_file, max_rect
+
+    def generate_english_dubbed(self, voice_name=None, color="white", fontsize=32,
+                                font="Keep-Calm-Medium-bold", rect_fill_color=None):
+        # if self.fps != 25:
+        #     self.video_path = fix_video_fps_to_25(self.video_path, self.video_path + ".f25.mp4")
+        #     self.video_cap = cv2.VideoCapture(self.video_path)
+        #     # 视频帧总数
+        #     self.frame_count = self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        #     # 视频帧率
+        #     self.fps = self.video_cap.get(cv2.CAP_PROP_FPS)
+        #     # 视频秒数
+        #     self.video_length = float(self.frame_count / self.fps)
+
+        if not self.ocr_result:
+            self.run()
+
+        if len(self.ocr_result) == 0:
+            return None, None, None
+
+        if not self.refilled_video:
+            self.refilled_video, self.max_rect = self.remove_text_watermark(rect_fill_color=rect_fill_color)
+
+        if not self.segments:
+            self.segments = get_english_dubbed(self.refilled_video, self.ocr_result, self.fps, voice_name)
+
+        # 此处还缺少一步带入参数，有此参数这个接口的功能就可以完成了
+        if not color:
+            color = "white"
+        if rect_fill_color == "white" and color == "white":
+            color = "black"
+
+        output_file = gen_subtitled_video(self.refilled_video, self.segments, self.max_rect, color=color, fontsize=fontsize,
+                                          font=font, no_voice=(voice_name is None or len(voice_name) == 0))
+
+        return output_file, self.segments, self.max_rect
 
     def generate_asr_subtitle(self):
         """
