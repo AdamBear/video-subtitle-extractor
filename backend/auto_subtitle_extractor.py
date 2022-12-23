@@ -60,7 +60,7 @@ if is_autodl:
 else:
     change_settings({"IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.0-Q16-HDRI\magick.exe"})
 
-from api_keys import subscription_key, endpoint, service_region, speech_key
+from api_keys import subscription_key, endpoint, speech_key
 
 from image_fill import TestOptions, process_image
 

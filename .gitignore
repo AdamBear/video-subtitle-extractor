@@ -354,3 +354,5 @@ $RECYCLE.BIN/
 /test.py
 /dylib/
 /settings.ini
+/backend/api_keys.py
+/backend/auto_subtitle_extractor3.py
